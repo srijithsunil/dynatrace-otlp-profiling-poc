@@ -1,0 +1,80 @@
+version: "3.9"
+
+# ── Two modes ──────────────────────────────────────────────────────────────────
+#
+# Mode A — Direct (Python app → Dynatrace)
+#   The sample-app includes a built-in sampling profiler that sends
+#   OTLP profiles directly to DT_ENDPOINT. Quickest to demo.
+#
+# Mode B — Collector pipeline (any language → OTel Collector → Dynatrace)
+#   Language-agnostic: any app pushes pprof/OTLP to the collector,
+#   which normalises and forwards to Dynatrace.
+#   Point DT_ENDPOINT in sample-app to http://otel-collector:4318.
+#
+# Development mode (no DT tenant yet)
+#   Set DT_ENDPOINT=http://validator:8888 to see decoded profiles locally.
+
+services:
+
+  # ── Sample application ──────────────────────────────────────────────────────
+  sample-app:
+    build:
+      context: .
+      dockerfile: sample-app/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DT_ENDPOINT=${DT_ENDPOINT}
+      - DT_API_TOKEN=${DT_API_TOKEN}
+      - OTEL_SERVICE_NAME=profiling-demo-app
+      - OTEL_SERVICE_VERSION=1.0.0
+      - DEPLOYMENT_ENV=poc
+      # Profiler tuning
+      - PROFILER_SAMPLE_INTERVAL_MS=10     # stack snapshot every 10ms
+      - PROFILER_FLUSH_INTERVAL_S=30       # export window every 30s
+    depends_on:
+      - validator
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Continuous load generator ───────────────────────────────────────────────
+  load-generator:
+    build: ./load-generator
+    environment:
+      - TARGET_URL=http://sample-app:8080
+      - REQUESTS_PER_SECOND=3
+    depends_on:
+      sample-app:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── OTel Collector (language-agnostic pipeline) ─────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.101.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./collector/config.yaml:/etc/otel/config.yaml:ro
+    environment:
+      - DT_ENDPOINT=${DT_ENDPOINT}
+      - DT_API_TOKEN=${DT_API_TOKEN}
+    ports:
+      - "4317:4317"   # OTLP gRPC  (any language → collector)
+      - "4318:4318"   # OTLP HTTP  (any language → collector)
+      - "4040:4040"   # pprof push (Go/Java/Python native profilers)
+    depends_on:
+      - validator
+    restart: unless-stopped
+
+  # ── Local OTLP profile validator ────────────────────────────────────────────
+  # Mimics the Dynatrace OTLP profiles endpoint.
+  # Decodes incoming payloads and prints flame-graph-style hotspot summaries.
+  # Use this to verify payload shape before pointing at a real DT tenant.
+  validator:
+    build: ./validator
+    ports:
+      - "8888:8888"
+    restart: unless-stopped

@@ -1,0 +1,36 @@
+
+# Standalone Dynatrace OTLP profiling infrastructure — collector only.
+#
+# USE THIS to add profiling to an EXISTING app without modifying it.
+# Run from the repo root alongside your existing docker-compose.yml:
+#
+#   docker compose -f your-compose.yml -f docker-compose.infra.yml up
+#
+# Or standalone (requires a real DT tenant in .env):
+#
+#   docker compose -f docker-compose.infra.yml up
+#
+# ── What each port accepts ─────────────────────────────────────────────────────
+#   :4317  OTLP gRPC  — OTel SDK (Java, Go, Python, Node.js, .NET)
+#   :4318  OTLP HTTP  — OTel SDK + direct SDK exports
+#   :4040  pprof push — Go stdlib net/http/pprof, async-profiler, py-spy
+#
+# Point your SDK/profiler at:
+#   http://otel-collector:4318   (within Docker network — use this service name)
+#   http://localhost:4318        (from host or Kubernetes NodePort)
+
+services:
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.101.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./collector/config.yaml:/etc/otel/config.yaml:ro
+    environment:
+      - DT_ENDPOINT=${DT_ENDPOINT}
+      - DT_API_TOKEN=${DT_API_TOKEN}
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "4040:4040"
+    restart: unless-stopped

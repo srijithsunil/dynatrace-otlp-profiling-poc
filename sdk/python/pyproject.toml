@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "dt-otlp-profiler"
+version = "0.1.0"
+description = "Dynatrace OTLP continuous profiler — Python SDK"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+keywords = ["dynatrace", "profiling", "opentelemetry", "otlp", "continuous-profiling"]
+dependencies = [
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "flask", "django"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dt_profiler*"]

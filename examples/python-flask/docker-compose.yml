@@ -1,0 +1,15 @@
+# Run from the REPO ROOT, not from this directory:
+#   docker compose -f examples/python-flask/docker-compose.yml up --build
+
+services:
+  flask-app:
+    build:
+      context: ../..
+      dockerfile: examples/python-flask/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - DT_ENDPOINT=${DT_ENDPOINT}
+      - DT_API_TOKEN=${DT_API_TOKEN}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-my-flask-app}
+      - DEPLOYMENT_ENV=${DEPLOYMENT_ENV:-production}

@@ -1,0 +1,108 @@
+# OTel Collector — language-agnostic profiling pipeline
+#
+# This is the key piece that makes the POC language-agnostic:
+# any app that can emit pprof (Go, Java via async-profiler, Python via pyroscope,
+# Ruby via rbspy, .NET via dotnet-trace) sends here, and the collector normalises
+# everything to OTLP profiles before forwarding to Dynatrace.
+#
+# Data paths
+# ──────────
+#   pprof over HTTP  →  pyroscopereceiver (port 4040)  ─┐
+#   OTLP/gRPC        →  otlpreceiver       (port 4317)  ─┼→  batch → dynatrace
+#   OTLP/HTTP        →  otlpreceiver       (port 4318)  ─┘
+#
+# Language-specific pprof push examples
+# ──────────────────────────────────────
+#   Go (net/http/pprof):
+#     import _ "net/http/pprof"
+#     curl -s http://app:6060/debug/pprof/profile?seconds=30 \
+#       | curl -X POST http://collector:4040/ingest \
+#              -H 'Content-Type: application/octet-stream' --data-binary @-
+#
+#   Java (async-profiler):
+#     asprof -d 30 -f profile.jfr <pid>
+#     # convert JFR → pprof with jfrconv then push to port 4040
+#
+#   Python (pyroscope SDK):
+#     import pyroscope
+#     pyroscope.configure(server_address="http://collector:4040", ...)
+
+receivers:
+  # Accepts pprof profiles pushed by any language runtime
+  # Converts internally to OTLP profiles signal
+  pyroscope:
+    endpoint: 0.0.0.0:4040
+
+  # Accepts native OTLP profiles from apps with direct OTLP instrumentation
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins: ["*"]
+
+processors:
+  # Detect resource attributes from the Docker environment
+  resourcedetection:
+    detectors: [docker, env]
+    timeout: 5s
+    override: false
+
+  # Batch before export to avoid per-sample HTTP overhead
+  batch:
+    timeout: 10s
+    send_batch_size: 512
+
+  # Add Dynatrace-specific resource attributes
+  resource:
+    attributes:
+      - key: dt.profiling.enabled
+        value: "true"
+        action: insert
+
+exporters:
+  # Dynatrace OTLP endpoint (real target)
+  otlphttp/dynatrace:
+    endpoint: "${DT_ENDPOINT}/api/v2/otlp"
+    headers:
+      Authorization: "Api-Token ${DT_API_TOKEN}"
+    tls:
+      insecure: false
+
+  # Local validator (for development/testing without a DT tenant)
+  # otlphttp appends /v1/profiles so the full URL becomes:
+  # http://validator:8888/api/v2/otlp/v1/profiles — matching the validator route.
+  otlphttp/validator:
+    endpoint: "http://validator:8888/api/v2/otlp"
+    tls:
+      insecure: true
+
+  # Console debug output
+  debug:
+    verbosity: normal
+
+service:
+  telemetry:
+    logs:
+      level: info
+
+  pipelines:
+    # Profiling pipeline — the core of this POC
+    profiles:
+      receivers:  [otlp, pyroscope]
+      processors: [resourcedetection, resource, batch]
+      exporters:  [otlphttp/dynatrace, otlphttp/validator]
+
+    # Traces pipeline — correlate profiles with distributed traces
+    traces:
+      receivers:  [otlp]
+      processors: [resourcedetection, batch]
+      exporters:  [otlphttp/dynatrace]
+
+    # Metrics pipeline
+    metrics:
+      receivers:  [otlp]
+      processors: [resourcedetection, batch]
+      exporters:  [otlphttp/dynatrace]
