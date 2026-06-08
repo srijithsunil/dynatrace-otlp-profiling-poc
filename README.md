@@ -83,7 +83,7 @@ flowchart TB
 Profiles decode to stdout. Use this to verify the stack before pointing at a real tenant.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/dynatrace-otlp-profiling-poc
+git clone https://github.com/srijithsunil/dynatrace-otlp-profiling-poc
 cd dynatrace-otlp-profiling-poc
 
 cp .env.example .env
@@ -117,7 +117,7 @@ After ~30 seconds you'll see this in the logs:
 ### Option 2 — Production mode (real Dynatrace tenant)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/dynatrace-otlp-profiling-poc
+git clone https://github.com/srijithsunil/dynatrace-otlp-profiling-poc
 cd dynatrace-otlp-profiling-poc
 
 cp .env.example .env
