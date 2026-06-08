@@ -76,6 +76,11 @@ def start_profiler(
             "DT_ENDPOINT is not set — profiler will sample stacks but not export. "
             "Set DT_ENDPOINT to your Dynatrace tenant URL."
         )
+    if not api_token:
+        log.warning(
+            "DT_API_TOKEN is not set — exports will be rejected with 401. "
+            "Set DT_API_TOKEN to a token with continuousProfilingStorage.ingest scope."
+        )
 
     attrs: Dict[str, str] = {"host.name": os.environ.get("HOSTNAME", "unknown")}
     if extra_attributes:

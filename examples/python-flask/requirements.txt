@@ -1,2 +1,2 @@
 flask>=3.0
-dt-otlp-profiler>=0.1.0
+# dt-otlp-profiler is installed from sdk/python/ by the Dockerfile — not on PyPI yet

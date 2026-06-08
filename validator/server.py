@@ -56,8 +56,11 @@ def decode_profile(profile: dict) -> dict:
             loc = locs.get(loc_id, {})
             for line in loc.get("line", []):
                 fn = fns.get(line.get("functionId", ""), {})
-                fname = st[int(fn["name"])]     if fn.get("name")     else "?"
-                ffile = st[int(fn["filename"])] if fn.get("filename") else "?"
+                try:
+                    fname = st[int(fn["name"])]     if fn.get("name")     else "?"
+                    ffile = st[int(fn["filename"])] if fn.get("filename") else "?"
+                except (IndexError, ValueError, KeyError):
+                    fname, ffile = "?", "?"
                 func_cpu[fname]  += cpu_ns
                 func_cnt[fname]  += cnt
                 func_file[fname]  = ffile
