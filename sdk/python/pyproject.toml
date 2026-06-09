@@ -20,3 +20,7 @@ dev = ["pytest", "flask", "django"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["dt_profiler*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"

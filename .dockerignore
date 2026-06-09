@@ -1,0 +1,42 @@
+# Version control
+.git
+.gitignore
+
+# Python artifacts
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/dist
+**/build
+**/.venv
+**/venv
+**/.env
+
+# Secrets / local config
+.env
+*.env
+.env.*
+
+# Editor / OS
+.DS_Store
+.idea
+.vscode
+*.swp
+*.swo
+Thumbs.db
+
+# Docs and diagrams (not needed in image)
+docs/
+*.md
+LICENSE
+
+# Test output
+coverage.xml
+.coverage
+htmlcov/
+
+# CI
+.github/

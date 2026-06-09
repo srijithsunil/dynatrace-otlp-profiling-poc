@@ -70,6 +70,15 @@ exporters:
       Authorization: "Api-Token ${DT_API_TOKEN}"
     tls:
       insecure: false
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 100
 
   # Local validator (for development/testing without a DT tenant)
   # otlphttp appends /v1/profiles so the full URL becomes:
@@ -78,12 +87,28 @@ exporters:
     endpoint: "http://validator:8888/api/v2/otlp"
     tls:
       insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 120s
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 50
 
   # Console debug output
   debug:
     verbosity: normal
 
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
+
 service:
+  extensions: [health_check, pprof]
   telemetry:
     logs:
       level: info

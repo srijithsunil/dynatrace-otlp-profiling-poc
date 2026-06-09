@@ -40,6 +40,19 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # ── Continuous load generator ───────────────────────────────────────────────
   load-generator:
@@ -51,6 +64,19 @@ services:
       sample-app:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+        reservations:
+          cpus: "0.1"
+          memory: 32M
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
   # ── OTel Collector (language-agnostic pipeline) ─────────────────────────────
   otel-collector:
@@ -65,9 +91,28 @@ services:
       - "4317:4317"   # OTLP gRPC  (any language → collector)
       - "4318:4318"   # OTLP HTTP  (any language → collector)
       - "4040:4040"   # pprof push (Go/Java/Python native profilers)
+      - "13133:13133" # collector health check
     depends_on:
       - validator
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:13133/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # ── Local OTLP profile validator ────────────────────────────────────────────
   # Mimics the Dynatrace OTLP profiles endpoint.
@@ -78,3 +123,16 @@ services:
     ports:
       - "8888:8888"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+        reservations:
+          cpus: "0.1"
+          memory: 32M
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
