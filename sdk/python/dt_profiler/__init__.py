@@ -1,13 +1,20 @@
 """
 dt-otlp-profiler: Dynatrace OTLP continuous profiler for Python.
 
+Profiling data is exported as OTLP Logs — one log record per unique stack
+trace per flush window. Query in DT Logs with:
+    fetch logs | filter log.source == "continuous_profiler"
+      | summarize cpu_ms = sum(toLong(profile.cpu_ns))/1000000,
+                  by:{profile.leaf_function}
+      | sort cpu_ms desc
+
 Minimal integration (2 lines):
     from dt_profiler import start_profiler
     start_profiler()
 
 All configuration is read from environment variables by default:
     DT_ENDPOINT        — your Dynatrace tenant URL
-    DT_API_TOKEN       — API token with continuousProfilingStorage.ingest scope
+    DT_API_TOKEN       — API token with logs.ingest scope
     OTEL_SERVICE_NAME  — name shown in DT (default: "unknown-service")
     DEPLOYMENT_ENV     — environment tag (default: "production")
 """

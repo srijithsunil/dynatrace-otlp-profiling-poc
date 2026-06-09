@@ -1,7 +1,9 @@
 """
-Local OTLP profiles validator — mimics the Dynatrace /api/v2/otlp/v1/profiles
-endpoint. Receives the exact same payload the real endpoint would receive,
-decodes it, and prints a flame-graph-style hotspot summary to stdout.
+Local OTLP logs validator — mimics the Dynatrace /api/v2/otlp/v1/logs
+endpoint for profiling data exported by dt-otlp-profiler.
+
+Receives the exact same payload the real endpoint would receive, decodes
+it, and prints a flame-graph-style hotspot summary to stdout.
 
 Use this to verify the OTLP payload shape before pointing the exporter at
 a real Dynatrace tenant.
@@ -17,53 +19,41 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 log = logging.getLogger(__name__)
 
 app = Flask(__name__)
-received: list[dict] = []   # keep last N profiles in memory for inspection
+received: list = []   # keep last N summaries in memory for inspection
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def decode_profile(profile: dict) -> dict:
+def decode_log_records(records: list) -> dict:
     """
-    Decode a single OTLP Profile object into a human-readable summary.
+    Aggregate profiler log records into a hotspot summary keyed by leaf function.
 
-    Returns:
-      {
-        "window_start": str,
-        "duration_s": float,
-        "period_ms": float,
-        "total_samples": int,
-        "hotspots": [ {"function": str, "file": str, "cpu_ms": float, "samples": int} ]
-      }
+    Each record has attributes: profile.sample_count, profile.cpu_ns,
+    profile.leaf_function, profile.leaf_file, profile.window_start_ns,
+    profile.window_duration_ns.
     """
-    st   = profile.get("stringTable", [])
-    fns  = {f["id"]: f for f in profile.get("function", [])}
-    locs = {l["id"]: l for l in profile.get("location", [])}
+    func_cpu: dict  = defaultdict(int)
+    func_cnt: dict  = defaultdict(int)
+    func_file: dict = {}
+    window_start_ns = 0
+    duration_ns     = 0
 
-    time_ns     = int(profile.get("timeNanos", 0))
-    duration_ns = int(profile.get("durationNanos", 0))
-    period_ns   = int(profile.get("period", 10_000_000))
+    for rec in records:
+        attrs = {a["key"]: a.get("value", {}) for a in rec.get("attributes", [])}
 
-    # Accumulate cpu_ns and sample counts per function
-    func_cpu: dict[str, int]     = defaultdict(int)
-    func_cnt: dict[str, int]     = defaultdict(int)
-    func_file: dict[str, str]    = {}
+        count    = int(attrs.get("profile.sample_count",       {}).get("intValue", 0))
+        cpu_ns   = int(attrs.get("profile.cpu_ns",             {}).get("intValue", 0))
+        leaf_fn  = attrs.get("profile.leaf_function",  {}).get("stringValue", "?")
+        leaf_f   = attrs.get("profile.leaf_file",      {}).get("stringValue", "?")
 
-    for sample in profile.get("sample", []):
-        values  = sample.get("value", ["0", "0"])
-        cpu_ns  = int(values[0]) if values else 0
-        cnt     = int(values[1]) if len(values) > 1 else 0
-        for loc_id in sample.get("locationId", []):
-            loc = locs.get(loc_id, {})
-            for line in loc.get("line", []):
-                fn = fns.get(line.get("functionId", ""), {})
-                try:
-                    fname = st[int(fn["name"])]     if fn.get("name")     else "?"
-                    ffile = st[int(fn["filename"])] if fn.get("filename") else "?"
-                except (IndexError, ValueError, KeyError):
-                    fname, ffile = "?", "?"
-                func_cpu[fname]  += cpu_ns
-                func_cnt[fname]  += cnt
-                func_file[fname]  = ffile
+        if not window_start_ns:
+            window_start_ns = int(attrs.get("profile.window_start_ns",    {}).get("intValue", 0))
+        if not duration_ns:
+            duration_ns     = int(attrs.get("profile.window_duration_ns", {}).get("intValue", 0))
+
+        func_cpu[leaf_fn]  += cpu_ns
+        func_cnt[leaf_fn]  += count
+        func_file[leaf_fn]  = leaf_f
 
     hotspots = sorted(
         [
@@ -80,72 +70,81 @@ def decode_profile(profile: dict) -> dict:
     )
 
     start_str = (
-        datetime.fromtimestamp(time_ns / 1e9, tz=timezone.utc).isoformat()
-        if time_ns else "unknown"
+        datetime.fromtimestamp(window_start_ns / 1e9, tz=timezone.utc).isoformat()
+        if window_start_ns else "unknown"
     )
 
     return {
-        "window_start": start_str,
-        "duration_s":   round(duration_ns / 1e9, 2),
-        "period_ms":    round(period_ns / 1_000_000, 2),
+        "window_start":  start_str,
+        "duration_s":    round(duration_ns / 1e9, 2),
         "total_samples": sum(func_cnt.values()),
-        "hotspots":     hotspots[:20],
+        "hotspots":      hotspots[:20],
     }
 
 
 def print_flame_summary(service: str, summary: dict) -> None:
     bar_width = 40
-    top        = summary["hotspots"][:10]
-    max_cpu    = top[0]["cpu_ms"] if top else 1
+    top       = summary["hotspots"][:10]
+    max_cpu   = top[0]["cpu_ms"] if top else 1
 
     print()
     print("─" * 70)
     print(f"  SERVICE   : {service}")
     print(f"  WINDOW    : {summary['window_start']}")
-    print(f"  DURATION  : {summary['duration_s']}s  PERIOD: {summary['period_ms']}ms")
+    print(f"  DURATION  : {summary['duration_s']}s")
     print(f"  SAMPLES   : {summary['total_samples']}")
     print()
     print(f"  {'FUNCTION':<30} {'FILE':<20} {'CPU':>8}   BAR")
     print(f"  {'-'*30} {'-'*20} {'-'*8}   {'-'*bar_width}")
     for h in top:
-        bar_len = int((h["cpu_ms"] / max_cpu) * bar_width) if max_cpu else 0
-        bar     = "█" * bar_len
+        bar_len    = int((h["cpu_ms"] / max_cpu) * bar_width) if max_cpu else 0
+        bar        = "█" * bar_len
         short_file = h["file"].split("/")[-1][-20:]
         print(f"  {h['function']:<30} {short_file:<20} {h['cpu_ms']:>6.0f}ms   {bar}")
     print("─" * 70)
     print()
 
 
-# ── Endpoint ──────────────────────────────────────────────────────────────────
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@app.route("/api/v2/otlp/v1/profiles", methods=["POST"])
-def receive_profiles():
+@app.route("/api/v2/otlp/v1/logs", methods=["POST"])
+def receive_logs():
     body = request.get_json(force=True, silent=True) or {}
 
-    for rp in body.get("resourceProfiles", []):
+    for rl in body.get("resourceLogs", []):
         attrs = {
             a["key"]: a["value"].get("stringValue", "")
-            for a in rp.get("resource", {}).get("attributes", [])
+            for a in rl.get("resource", {}).get("attributes", [])
         }
         service = attrs.get("service.name", "unknown")
 
-        for sp in rp.get("scopeProfiles", []):
-            for profile in sp.get("profiles", []):
-                summary = decode_profile(profile)
+        for sl in rl.get("scopeLogs", []):
+            all_records = sl.get("logRecords", [])
+
+            # Filter to profiler records only (non-profiler logs pass through silently)
+            profiler_records = [
+                r for r in all_records
+                if any(
+                    a["key"] == "log.source"
+                    and a.get("value", {}).get("stringValue") == "continuous_profiler"
+                    for a in r.get("attributes", [])
+                )
+            ]
+
+            if profiler_records:
+                summary = decode_log_records(profiler_records)
                 print_flame_summary(service, summary)
                 received.append({"service": service, "summary": summary})
 
-    # Keep last 50
     if len(received) > 50:
         del received[:-50]
 
-    # Mimic Dynatrace OTLP success response
     return jsonify({"partialSuccess": {}}), 202
 
 
-@app.route("/api/v2/otlp/v1/profiles", methods=["GET"])
+@app.route("/api/v2/otlp/v1/logs", methods=["GET"])
 def list_received():
-    """Quick inspection endpoint — see what profiles have been received."""
+    """Quick inspection endpoint — see what profiler windows have been received."""
     return jsonify({"count": len(received), "profiles": received[-5:]})
 
 
@@ -155,6 +154,6 @@ def health():
 
 
 if __name__ == "__main__":
-    log.info("OTLP Profile Validator listening on :8888")
-    log.info("Endpoint: POST http://localhost:8888/api/v2/otlp/v1/profiles")
+    log.info("OTLP Profiler Log Validator listening on :8888")
+    log.info("Endpoint: POST http://localhost:8888/api/v2/otlp/v1/logs")
     app.run(host="0.0.0.0", port=8888, threaded=True)

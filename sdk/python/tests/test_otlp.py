@@ -1,102 +1,147 @@
 """
-Tests for build_otlp_profile() — validates OTLP Profiles spec compliance.
+Tests for build_otlp_logs() — validates OTLP Logs profiling payload shape.
 """
 import pytest
-from dt_profiler.otlp_exporter import build_otlp_profile
+from dt_profiler.otlp_exporter import build_otlp_logs
 
 
-def _simple_stack(fname="app.py", lineno=10, func="handler"):
-    """One-frame stack: outermost == innermost."""
-    return (fname, lineno, func)
+def _attr(record, key):
+    """Extract a single attribute value dict from a log record."""
+    for a in record.get("attributes", []):
+        if a["key"] == key:
+            return a["value"]
+    return None
 
 
-def test_string_table_starts_with_empty():
-    profile = build_otlp_profile({}, 10_000_000, 0, 1_000_000_000)
-    assert profile["stringTable"][0] == "", "index 0 must be empty string per OTLP spec"
+def _int_attr(record, key) -> int:
+    v = _attr(record, key)
+    return int(v["intValue"]) if v else 0
 
 
-def test_empty_samples_produces_no_sample_records():
-    profile = build_otlp_profile({}, 10_000_000, 0, 1_000_000_000)
-    assert profile["sample"] == []
-    assert profile["function"] == []
-    assert profile["location"] == []
+def _str_attr(record, key) -> str:
+    v = _attr(record, key)
+    return v.get("stringValue", "") if v else ""
 
 
-def test_single_frame_values():
-    stack = (_simple_stack(),)
-    samples = {stack: 5}
+# ── basic shape ───────────────────────────────────────────────────────────────
+
+def test_empty_samples_returns_empty_list():
+    records = build_otlp_logs({}, 10_000_000, 0, 1_000_000_000)
+    assert records == []
+
+
+def test_one_stack_produces_one_record():
+    stack = (("app.py", 42, "handler"),)
+    records = build_otlp_logs({stack: 3}, 10_000_000, 0, 30_000_000_000)
+    assert len(records) == 1
+
+
+def test_multiple_stacks_produce_multiple_records():
+    s1 = (("a.py", 1, "alpha"),)
+    s2 = (("b.py", 2, "beta"),)
+    records = build_otlp_logs({s1: 10, s2: 7}, 10_000_000, 0, 30_000_000_000)
+    assert len(records) == 2
+
+
+# ── attribute values ──────────────────────────────────────────────────────────
+
+def test_sample_count_and_cpu_ns():
+    stack = (("app.py", 10, "work"),)
     interval_ns = 10_000_000
+    count = 5
 
-    profile = build_otlp_profile(samples, interval_ns, 0, 500_000_000)
+    records = build_otlp_logs({stack: count}, interval_ns, 0, 30_000_000_000)
+    r = records[0]
 
-    assert len(profile["sample"]) == 1
-    s = profile["sample"][0]
-    # value[0] = count * interval_ns
-    assert int(s["value"][0]) == 5 * interval_ns
-    # value[1] = raw count
-    assert int(s["value"][1]) == 5
+    assert _int_attr(r, "profile.sample_count") == count
+    assert _int_attr(r, "profile.cpu_ns") == count * interval_ns
 
 
-def test_location_order_innermost_first():
-    """OTLP spec: locationId[0] = leaf (innermost) frame."""
+def test_leaf_is_innermost_frame():
     outer = ("app.py", 1, "main")
-    inner = ("app.py", 20, "do_work")
-    # stack tuple is outermost → innermost
+    inner = ("db.py",  20, "query")
+    stack = (outer, inner)   # outermost → innermost
+
+    records = build_otlp_logs({stack: 1}, 10_000_000, 0, 30_000_000_000)
+    r = records[0]
+
+    assert _str_attr(r, "profile.leaf_function") == "query"
+    assert _str_attr(r, "profile.leaf_file")     == "db.py"
+    assert _int_attr(r, "profile.leaf_line")     == 20
+
+
+def test_root_is_outermost_frame():
+    outer = ("app.py", 1, "main")
+    inner = ("db.py",  20, "query")
     stack = (outer, inner)
-    samples = {stack: 1}
 
-    profile = build_otlp_profile(samples, 10_000_000, 0, 1_000_000_000)
-    assert len(profile["sample"]) == 1
-    loc_ids = profile["sample"][0]["locationId"]
-
-    # Map location IDs back to function names
-    loc_map = {loc["id"]: loc for loc in profile["location"]}
-    func_map = {fn["id"]: fn for fn in profile["function"]}
-    st = profile["stringTable"]
-
-    leaf_func_name = st[int(func_map[loc_map[loc_ids[0]]["line"][0]["functionId"]]["name"])]
-    root_func_name = st[int(func_map[loc_map[loc_ids[-1]]["line"][0]["functionId"]]["name"])]
-
-    assert leaf_func_name == "do_work", f"first location must be leaf (innermost), got {leaf_func_name}"
-    assert root_func_name == "main",    f"last location must be root (outermost), got {root_func_name}"
+    records = build_otlp_logs({stack: 1}, 10_000_000, 0, 30_000_000_000)
+    assert _str_attr(records[0], "profile.root_function") == "main"
 
 
-def test_function_deduplication():
-    """Same function at the same line must reuse one Function record."""
-    frame = ("mod.py", 5, "fn")
-    stack_a = (frame,)
-    stack_b = (frame, ("mod.py", 10, "other"))
-    samples = {stack_a: 2, stack_b: 3}
-
-    profile = build_otlp_profile(samples, 10_000_000, 0, 1_000_000_000)
-    func_ids = {fn["id"] for fn in profile["function"]}
-    # 'fn' at line 5 and 'other' at line 10 → 2 unique functions
-    assert len(profile["function"]) == 2
-    assert len(func_ids) == 2
+def test_stack_depth():
+    stack = (("a.py", 1, "f1"), ("b.py", 2, "f2"), ("c.py", 3, "f3"))
+    records = build_otlp_logs({stack: 1}, 10_000_000, 0, 30_000_000_000)
+    assert _int_attr(records[0], "profile.stack_depth") == 3
 
 
-def test_sample_type_structure():
-    profile = build_otlp_profile({}, 10_000_000, 0, 1_000_000_000)
-    assert len(profile["sampleType"]) == 2
-    st = profile["stringTable"]
-    types = {st[int(t["type"])] for t in profile["sampleType"]}
-    assert "cpu" in types
-    assert "samples" in types
+def test_log_source_attribute():
+    stack = (("app.py", 1, "fn"),)
+    records = build_otlp_logs({stack: 1}, 10_000_000, 0, 30_000_000_000)
+    assert _str_attr(records[0], "log.source") == "continuous_profiler"
 
 
-def test_timing_fields():
-    start = 1_700_000_000_000_000_000
-    duration = 30_000_000_000
-    profile = build_otlp_profile({}, 10_000_000, start, duration)
-    assert int(profile["timeNanos"]) == start
-    assert int(profile["durationNanos"]) == duration
+def test_window_timing_attributes():
+    start_ns    = 1_700_000_000_000_000_000
+    duration_ns = 30_000_000_000
+    stack = (("app.py", 1, "fn"),)
+
+    records = build_otlp_logs({stack: 1}, 10_000_000, start_ns, duration_ns)
+    r = records[0]
+
+    assert _int_attr(r, "profile.window_start_ns")    == start_ns
+    assert _int_attr(r, "profile.window_duration_ns") == duration_ns
+    assert int(r["timeUnixNano"])                     == start_ns
 
 
-def test_multiple_stacks_produce_multiple_samples():
-    s1 = (("a.py", 1, "f1"),)
-    s2 = (("b.py", 2, "f2"),)
-    samples = {s1: 10, s2: 7}
-    profile = build_otlp_profile(samples, 10_000_000, 0, 1_000_000_000)
-    assert len(profile["sample"]) == 2
-    total = sum(int(s["value"][1]) for s in profile["sample"])
-    assert total == 17
+# ── severity ──────────────────────────────────────────────────────────────────
+
+def test_severity_is_info():
+    stack = (("app.py", 1, "fn"),)
+    records = build_otlp_logs({stack: 1}, 10_000_000, 0, 30_000_000_000)
+    r = records[0]
+    assert r["severityNumber"] == 9
+    assert r["severityText"]   == "INFO"
+
+
+# ── body format ───────────────────────────────────────────────────────────────
+
+def test_body_contains_function_and_file():
+    stack = (("app.py", 42, "handle_request"), ("db.py", 15, "query"))
+    records = build_otlp_logs({stack: 1}, 10_000_000, 0, 30_000_000_000)
+    body = records[0]["body"]["stringValue"]
+
+    assert "handle_request" in body
+    assert "query"          in body
+    assert "app.py"         in body
+    assert "db.py"          in body
+
+
+def test_body_outermost_before_leaf():
+    """Body must list frames outermost → innermost (Python traceback style)."""
+    outer = ("app.py", 1, "main")
+    inner = ("db.py",  5, "query")
+    stack = (outer, inner)
+    records = build_otlp_logs({stack: 1}, 10_000_000, 0, 30_000_000_000)
+    body = records[0]["body"]["stringValue"]
+
+    assert body.index("main") < body.index("query"), \
+        "outermost frame should appear before leaf frame in body text"
+
+
+# ── leaf filename is basename only ────────────────────────────────────────────
+
+def test_leaf_file_is_basename():
+    stack = (("/usr/app/src/workers/db.py", 10, "query"),)
+    records = build_otlp_logs({stack: 1}, 10_000_000, 0, 30_000_000_000)
+    assert _str_attr(records[0], "profile.leaf_file") == "db.py"

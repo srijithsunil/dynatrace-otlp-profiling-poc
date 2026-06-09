@@ -1,5 +1,23 @@
 """
-Converts stack-sample data to OTLP Profiles format and exports to Dynatrace.
+Converts stack-sample data to OTLP Logs format and exports to Dynatrace.
+
+Each unique stack trace observed in a profiling window becomes one log record.
+This uses the well-supported OTLP Logs ingest path rather than the alpha
+OTLP Profiles signal, making it compatible with any Dynatrace environment.
+
+Log record anatomy
+──────────────────
+  body        — formatted stack trace (outermost → innermost, Python traceback style)
+  attributes  — profile.sample_count, profile.cpu_ns, profile.leaf_function,
+                profile.leaf_file, profile.leaf_line, profile.root_function,
+                profile.stack_depth, profile.window_start_ns,
+                profile.window_duration_ns, log.source="continuous_profiler"
+
+DT Logs queries
+───────────────
+  fetch logs | filter log.source == "continuous_profiler"
+    | summarize cpu_ms = sum(toLong(profile.cpu_ns))/1000000, by:{profile.leaf_function}
+    | sort cpu_ms desc
 
 Production features
 ───────────────────
@@ -7,15 +25,12 @@ Production features
 - Circuit breaker: opens after 5 consecutive failures, resets after 60s
 - Connection pooling via requests.Session (keep-alive, reuse)
 - No retry on 4xx (client errors — fix config, don't hammer)
-
-OTLP Profiles spec:
-  opentelemetry/opentelemetry-proto → profiles/v1development/profiles.proto
 """
 
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -26,106 +41,70 @@ _CIRCUIT_OPEN_AFTER  = 5        # consecutive failures before circuit opens
 _CIRCUIT_BACKOFF_S   = 60       # seconds circuit stays open before half-open probe
 
 
-# ── Profile builder ──────────────────────────────────────────────────────────
+# ── Log builder ──────────────────────────────────────────────────────────────
 
-def build_otlp_profile(
+def build_otlp_logs(
     samples: Dict[tuple, int],
     sample_interval_ns: int,
     start_time_ns: int,
     duration_ns: int,
-) -> Dict[str, Any]:
+) -> List[Dict[str, Any]]:
     """
-    Convert { stack_tuple: count } → OTLP Profile JSON object.
+    Convert { stack_tuple: count } → list of OTLP LogRecord objects.
+
+    One log record per unique stack trace observed in the window.
 
     stack_tuple elements: (filename, lineno, funcname)  outermost → innermost
     count: number of times this exact stack was observed during the window
-
-    Value semantics
-    ───────────────
-    value[0] = count * sample_interval_ns  → approximate CPU nanoseconds
-    value[1] = count                        → raw sample count
     """
-    string_table = [""]  # index 0 MUST be empty string per spec
-
-    def intern(s: str) -> int:
-        try:
-            return string_table.index(s)
-        except ValueError:
-            string_table.append(s)
-            return len(string_table) - 1
-
-    cpu_type_idx     = intern("cpu")
-    ns_unit_idx      = intern("nanoseconds")
-    samples_type_idx = intern("samples")
-    count_unit_idx   = intern("count")
-
-    functions: Dict[tuple, int] = {}
-    locations: Dict[tuple, int] = {}
-    profile_functions = []
-    profile_locations = []
-    profile_samples   = []
+    records = []
 
     for stack, count in samples.items():
-        location_ids = []
+        cpu_ns = count * sample_interval_ns
 
-        for frame in reversed(stack):   # innermost first per OTLP spec
-            filename, lineno, funcname = frame
-            frame_key = (filename, lineno, funcname)
+        # stack is outermost → innermost; leaf is the hot function
+        leaf       = stack[-1] if stack else ("unknown", 0, "unknown")
+        root       = stack[0]  if stack else ("unknown", 0, "unknown")
+        leaf_file, leaf_line, leaf_func = leaf
+        _,         _,         root_func = root
 
-            if frame_key not in locations:
-                func_key = (filename, funcname)
-                if func_key not in functions:
-                    fid = len(profile_functions) + 1
-                    functions[func_key] = fid
-                    profile_functions.append({
-                        "id":         str(fid),
-                        "name":       str(intern(funcname)),
-                        "systemName": str(intern(funcname)),
-                        "filename":   str(intern(filename)),
-                        "startLine":  str(lineno),
-                    })
+        # Python traceback style: outermost first, leaf last
+        body = "\n".join(
+            f'  File "{fname}", line {lineno}, in {func}'
+            for fname, lineno, func in stack
+        )
 
-                lid = len(profile_locations) + 1
-                locations[frame_key] = lid
-                profile_locations.append({
-                    "id": str(lid),
-                    "line": [{
-                        "functionId": str(functions[(filename, funcname)]),
-                        "line":       str(lineno),
-                    }],
-                })
-
-            location_ids.append(str(locations[frame_key]))
-
-        profile_samples.append({
-            "locationId": location_ids,
-            "value": [
-                str(count * sample_interval_ns),
-                str(count),
+        records.append({
+            "timeUnixNano":         str(start_time_ns),
+            "observedTimeUnixNano": str(start_time_ns),
+            "severityNumber":       9,       # INFO
+            "severityText":         "INFO",
+            "body":                 {"stringValue": body},
+            "attributes": [
+                {"key": "log.source",                 "value": {"stringValue": "continuous_profiler"}},
+                {"key": "profile.sample_count",       "value": {"intValue": str(count)}},
+                {"key": "profile.cpu_ns",             "value": {"intValue": str(cpu_ns)}},
+                {"key": "profile.leaf_function",      "value": {"stringValue": leaf_func}},
+                {"key": "profile.leaf_file",          "value": {"stringValue": leaf_file.split("/")[-1]}},
+                {"key": "profile.leaf_line",          "value": {"intValue": str(leaf_line)}},
+                {"key": "profile.root_function",      "value": {"stringValue": root_func}},
+                {"key": "profile.stack_depth",        "value": {"intValue": str(len(stack))}},
+                {"key": "profile.window_start_ns",    "value": {"intValue": str(start_time_ns)}},
+                {"key": "profile.window_duration_ns", "value": {"intValue": str(duration_ns)}},
             ],
         })
 
-    return {
-        "sampleType": [
-            {"type": str(cpu_type_idx),     "unit": str(ns_unit_idx)},
-            {"type": str(samples_type_idx), "unit": str(count_unit_idx)},
-        ],
-        "sample":      profile_samples,
-        "location":    profile_locations,
-        "function":    profile_functions,
-        "stringTable": string_table,
-        "timeNanos":       str(start_time_ns),
-        "durationNanos":   str(duration_ns),
-        "periodType":  {"type": str(cpu_type_idx), "unit": str(ns_unit_idx)},
-        "period":      str(sample_interval_ns),
-    }
+    return records
 
 
 # ── Exporter ─────────────────────────────────────────────────────────────────
 
 class DynatraceOTLPProfileExporter:
     """
-    Exports OTLP profiles to Dynatrace via HTTP.
+    Exports profiling data as OTLP Logs to Dynatrace via HTTP.
+
+    Each flush window produces one log record per unique stack trace.
+    Query them in DT Logs with: filter log.source == "continuous_profiler"
 
     Production features:
     - Retry with exponential backoff on transient errors (5xx, timeout, connection error)
@@ -184,7 +163,7 @@ class DynatraceOTLPProfileExporter:
             )
             return False
 
-        profile = build_otlp_profile(
+        log_records = build_otlp_logs(
             samples, self.sample_interval_ns, start_time_ns, duration_ns
         )
 
@@ -200,16 +179,16 @@ class DynatraceOTLPProfileExporter:
             resource_attrs.append({"key": k, "value": {"stringValue": v}})
 
         payload = {
-            "resourceProfiles": [{
+            "resourceLogs": [{
                 "resource": {"attributes": resource_attrs},
-                "scopeProfiles": [{
+                "scopeLogs": [{
                     "scope": {"name": "dynatrace-otlp-profiler", "version": "0.1.0"},
-                    "profiles": [profile],
+                    "logRecords": log_records,
                 }],
             }]
         }
 
-        url = f"{self.endpoint}/api/v2/otlp/v1/profiles"
+        url = f"{self.endpoint}/api/v2/otlp/v1/logs"
         return self._post_with_retry(url, payload, sum(samples.values()), duration_ns)
 
     def _post_with_retry(
@@ -289,16 +268,16 @@ class DynatraceOTLPProfileExporter:
         start_time_ns: int,
         duration_ns: int,
     ) -> str:
-        """Return the OTLP JSON payload as a string — useful for debugging."""
-        profile = build_otlp_profile(
+        """Return the OTLP Logs JSON payload as a string — useful for debugging."""
+        log_records = build_otlp_logs(
             samples, self.sample_interval_ns, start_time_ns, duration_ns
         )
         payload = {
-            "resourceProfiles": [{
+            "resourceLogs": [{
                 "resource": {"attributes": [
                     {"key": "service.name", "value": {"stringValue": self.service_name}},
                 ]},
-                "scopeProfiles": [{"profiles": [profile]}],
+                "scopeLogs": [{"logRecords": log_records}],
             }]
         }
         return json.dumps(payload, indent=2)

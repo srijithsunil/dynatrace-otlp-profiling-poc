@@ -114,7 +114,15 @@ service:
       level: info
 
   pipelines:
-    # Profiling pipeline — the core of this POC
+    # Logs pipeline — receives profiling data emitted as OTLP Logs
+    # by dt-otlp-profiler (Python SDK) and any other OTLP-logs producer.
+    logs:
+      receivers:  [otlp]
+      processors: [resourcedetection, batch]
+      exporters:  [otlphttp/dynatrace, otlphttp/validator]
+
+    # Profiling pipeline — receives pprof pushed by Go / Java / Ruby runtimes
+    # via the pyroscope receiver (port 4040) and any native OTLP profiles sender.
     profiles:
       receivers:  [otlp, pyroscope]
       processors: [resourcedetection, resource, batch]
