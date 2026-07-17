@@ -7,17 +7,29 @@ OTLP Profiles signal, making it compatible with any Dynatrace environment.
 
 Log record anatomy
 ──────────────────
+  traceId     — hex trace ID (set when a request trace context was registered)
+  spanId      — hex span ID  (set when a request trace context was registered)
   body        — formatted stack trace (outermost → innermost, Python traceback style)
   attributes  — profile.sample_count, profile.cpu_ns, profile.leaf_function,
                 profile.leaf_file, profile.leaf_line, profile.root_function,
                 profile.stack_depth, profile.window_start_ns,
                 profile.window_duration_ns, log.source="continuous_profiler"
+                trace.id, span.id (when trace context is present)
+
+When traceId/spanId are set, Dynatrace automatically links these profile records
+to the matching distributed trace in the Distributed Traces app.
 
 DT Logs queries
 ───────────────
-  fetch logs | filter log.source == "continuous_profiler"
+  // Top CPU consumers for a specific trace
+  fetch logs | filter log.source == "continuous_profiler" and trace.id == "<id>"
     | summarize cpu_ms = sum(toLong(profile.cpu_ns))/1000000, by:{profile.leaf_function}
     | sort cpu_ms desc
+
+  // All traces that touched a hot function
+  fetch logs | filter log.source == "continuous_profiler"
+                and profile.leaf_function == "slow_db_query"
+    | fields trace.id, span.id, profile.cpu_ns, profile.leaf_file
 
 Production features
 ───────────────────
@@ -50,16 +62,17 @@ def build_otlp_logs(
     duration_ns: int,
 ) -> List[Dict[str, Any]]:
     """
-    Convert { stack_tuple: count } → list of OTLP LogRecord objects.
+    Convert { (stack_tuple, trace_id, span_id): count } → list of OTLP LogRecord objects.
 
-    One log record per unique stack trace observed in the window.
+    One log record per unique (stack, trace context) pair observed in the window.
 
     stack_tuple elements: (filename, lineno, funcname)  outermost → innermost
-    count: number of times this exact stack was observed during the window
+    trace_id / span_id:   lowercase hex strings; empty string when outside a trace
+    count:                number of times this exact stack+context was observed
     """
     records = []
 
-    for stack, count in samples.items():
+    for (stack, trace_id, span_id), count in samples.items():
         cpu_ns = count * sample_interval_ns
 
         # stack is outermost → innermost; leaf is the hot function
@@ -74,25 +87,43 @@ def build_otlp_logs(
             for fname, lineno, func in stack
         )
 
-        records.append({
+        attrs = [
+            {"key": "log.source",                 "value": {"stringValue": "continuous_profiler"}},
+            {"key": "profile.sample_count",       "value": {"intValue": str(count)}},
+            {"key": "profile.cpu_ns",             "value": {"intValue": str(cpu_ns)}},
+            {"key": "profile.leaf_function",      "value": {"stringValue": leaf_func}},
+            {"key": "profile.leaf_file",          "value": {"stringValue": leaf_file.split("/")[-1]}},
+            {"key": "profile.leaf_line",          "value": {"intValue": str(leaf_line)}},
+            {"key": "profile.root_function",      "value": {"stringValue": root_func}},
+            {"key": "profile.stack_depth",        "value": {"intValue": str(len(stack))}},
+            {"key": "profile.window_start_ns",    "value": {"intValue": str(start_time_ns)}},
+            {"key": "profile.window_duration_ns", "value": {"intValue": str(duration_ns)}},
+        ]
+
+        # Include trace/span IDs as queryable attributes when present.
+        # These mirror the top-level traceId/spanId fields so DQL can filter on them.
+        if trace_id:
+            attrs.append({"key": "trace.id", "value": {"stringValue": trace_id}})
+        if span_id:
+            attrs.append({"key": "span.id",  "value": {"stringValue": span_id}})
+
+        record: Dict[str, Any] = {
             "timeUnixNano":         str(start_time_ns),
             "observedTimeUnixNano": str(start_time_ns),
             "severityNumber":       9,       # INFO
             "severityText":         "INFO",
             "body":                 {"stringValue": body},
-            "attributes": [
-                {"key": "log.source",                 "value": {"stringValue": "continuous_profiler"}},
-                {"key": "profile.sample_count",       "value": {"intValue": str(count)}},
-                {"key": "profile.cpu_ns",             "value": {"intValue": str(cpu_ns)}},
-                {"key": "profile.leaf_function",      "value": {"stringValue": leaf_func}},
-                {"key": "profile.leaf_file",          "value": {"stringValue": leaf_file.split("/")[-1]}},
-                {"key": "profile.leaf_line",          "value": {"intValue": str(leaf_line)}},
-                {"key": "profile.root_function",      "value": {"stringValue": root_func}},
-                {"key": "profile.stack_depth",        "value": {"intValue": str(len(stack))}},
-                {"key": "profile.window_start_ns",    "value": {"intValue": str(start_time_ns)}},
-                {"key": "profile.window_duration_ns", "value": {"intValue": str(duration_ns)}},
-            ],
-        })
+            "attributes":           attrs,
+        }
+
+        # traceId / spanId are first-class OTLP log record fields (hex-encoded per
+        # OTLP spec §4.3).  Dynatrace reads these to link the record to a trace.
+        if trace_id:
+            record["traceId"] = trace_id
+        if span_id:
+            record["spanId"] = span_id
+
+        records.append(record)
 
     return records
 

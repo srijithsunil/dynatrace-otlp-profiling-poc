@@ -129,9 +129,9 @@ Required scopes:
 
 | Scope | Purpose |
 |---|---|
-| `openTelemetryTrace.ingest` | Required for OTLP ingestion |
-| `metrics.ingest` | Required for OTLP metrics |
-| `continuousProfilingStorage.ingest` | Required for OTLP profiles (enable if available in your environment) |
+| `logs.ingest` | Required — profiling data is sent as OTLP Logs |
+| `openTelemetryTrace.ingest` | Required if sending traces from the same token |
+| `metrics.ingest` | Optional — only if sending OTLP metrics |
 
 ```
 DT_ENDPOINT=https://<your-env-id>.live.dynatrace.com

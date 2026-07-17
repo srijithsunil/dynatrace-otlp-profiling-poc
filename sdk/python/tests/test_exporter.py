@@ -10,7 +10,7 @@ import requests
 from dt_profiler.otlp_exporter import DynatraceOTLPProfileExporter, _RETRY_DELAYS
 
 
-SIMPLE_SAMPLES = {(("app.py", 1, "main"),): 3}
+SIMPLE_SAMPLES = {((("app.py", 1, "main"),), "", ""): 3}
 START_NS       = 1_000_000_000
 DURATION_NS    = 30_000_000_000
 

@@ -12,6 +12,18 @@ Minimal integration (2 lines):
     from dt_profiler import start_profiler
     start_profiler()
 
+Trace correlation — link profiles to distributed traces in Dynatrace
+─────────────────────────────────────────────────────────────────────
+Option 1 — automatic (requires opentelemetry-api):
+    Use init_flask_profiling(app) for Flask, or wrap any handler with
+    auto_trace_context() to read the active OTel span automatically.
+
+Option 2 — manual (no dependencies):
+    from dt_profiler import trace_context
+    with trace_context(trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+                       span_id="00f067aa0ba902b7"):
+        handle_request()
+
 All configuration is read from environment variables by default:
     DT_ENDPOINT        — your Dynatrace tenant URL
     DT_API_TOKEN       — API token with logs.ingest scope
@@ -24,13 +36,22 @@ import signal
 import threading
 import time
 import logging
-from typing import Optional, Dict
+from contextlib import contextmanager
+from typing import Optional, Dict, Generator
 
-from .sampler import StackSampler
+from .sampler import StackSampler, register_thread_trace, unregister_thread_trace
 from .otlp_exporter import DynatraceOTLPProfileExporter
 
-__version__ = "0.1.0"
-__all__ = ["start_profiler", "stop_profiler"]
+__version__ = "0.2.0"
+__all__ = [
+    "start_profiler",
+    "stop_profiler",
+    "trace_context",
+    "auto_trace_context",
+    "init_flask_profiling",
+    "register_thread_trace",
+    "unregister_thread_trace",
+]
 
 log = logging.getLogger(__name__)
 
@@ -172,6 +193,81 @@ def stop_profiler() -> None:
     _sampler = None
     _exporter = None
     log.info("dt_profiler stopped")
+
+
+# ── Trace correlation helpers ─────────────────────────────────────────────────
+
+@contextmanager
+def trace_context(trace_id: str, span_id: str) -> Generator[None, None, None]:
+    """
+    Bind a trace/span ID pair to the calling thread so that all stack samples
+    captured while the context is active are tagged with those IDs.
+
+    Use this when you already have the IDs and don't rely on opentelemetry-api:
+
+        with trace_context(trace_id="4bf92f...", span_id="00f067..."):
+            handle_request()
+    """
+    register_thread_trace(trace_id, span_id)
+    try:
+        yield
+    finally:
+        unregister_thread_trace()
+
+
+@contextmanager
+def auto_trace_context() -> Generator[None, None, None]:
+    """
+    Read the active OTel span from the current thread and register its IDs.
+    Requires opentelemetry-api to be installed; silently no-ops if it is absent
+    or if there is no active span.
+
+        with auto_trace_context():
+            handle_request()
+    """
+    try:
+        from opentelemetry import trace as _otel_trace  # type: ignore[import]
+        ctx = _otel_trace.get_current_span().get_span_context()
+        if ctx.is_valid:
+            register_thread_trace(
+                format(ctx.trace_id, "032x"),
+                format(ctx.span_id,  "016x"),
+            )
+    except ImportError:
+        pass
+    try:
+        yield
+    finally:
+        unregister_thread_trace()
+
+
+def init_flask_profiling(app) -> None:
+    """
+    Register before_request / teardown_request hooks on a Flask app so that
+    every request is automatically tagged with its OTel trace context.
+
+    Requires opentelemetry-api. Call once after create_app():
+
+        from dt_profiler import start_profiler, init_flask_profiling
+        start_profiler()
+        init_flask_profiling(app)
+    """
+    @app.before_request
+    def _profiler_before_request():
+        try:
+            from opentelemetry import trace as _otel_trace  # type: ignore[import]
+            ctx = _otel_trace.get_current_span().get_span_context()
+            if ctx.is_valid:
+                register_thread_trace(
+                    format(ctx.trace_id, "032x"),
+                    format(ctx.span_id,  "016x"),
+                )
+        except ImportError:
+            pass
+
+    @app.teardown_request
+    def _profiler_teardown_request(exc):
+        unregister_thread_trace()
 
 
 def _register_sigterm() -> None:

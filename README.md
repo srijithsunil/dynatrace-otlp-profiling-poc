@@ -1,7 +1,7 @@
 # Dynatrace OTLP Continuous Profiling
 
-> **POC** — demonstrates that Dynatrace can ingest code profiling and method
-> hotspot data via the **OTLP Profiles standard**, not just via OneAgent.
+> Demonstrates continuous code profiling ingested into Dynatrace via **OTLP Logs**,
+> with optional trace correlation — link method hotspots directly to distributed traces.
 
 ---
 
@@ -9,8 +9,9 @@
 
 | Capability | How it's demonstrated |
 |---|---|
-| OTLP Profiles ingestion | App emits `ExportProfilesServiceRequest` payloads to `/api/v2/otlp/v1/profiles` |
-| Method hotspots | Flame-graph output showing top CPU-consuming functions by name |
+| Continuous profiling via OTLP Logs | App emits profiling data as structured OTLP log records to `/api/v2/otlp/v1/logs` |
+| Method hotspots | Stack frequency map → `profile.leaf_function` / `profile.cpu_ns` attributes |
+| Trace correlation | `traceId` + `spanId` set on each log record — links profiles to Distributed Traces |
 | Language-agnostic pipeline | OTel Collector accepts pprof from Go, Java, Python, Node.js, .NET |
 | Full stack traces | Complete call chains captured, not just leaf functions |
 | Zero instrumentation | Wall-clock sampling — no code changes to the profiled app |
@@ -72,9 +73,8 @@ flowchart TB
 | Dynatrace API token | Settings → Access tokens | Production mode |
 
 **Required API token scopes:**
-- `openTelemetryTrace.ingest`
-- `metrics.ingest`
-- `continuousProfilingStorage.ingest`
+- `logs.ingest` — profiling data is sent as OTLP Logs
+- `openTelemetryTrace.ingest` — if you also ingest traces from the same token
 
 ---
 
@@ -230,6 +230,88 @@ COPY sdk/python /sdk/python
 RUN pip install /sdk/python
 # ... rest of your Dockerfile
 ```
+
+---
+
+## Trace correlation — link profiles to distributed traces
+
+By default the profiler aggregates hotspots globally. With trace correlation enabled,
+each stack sample is tagged with the `traceId` and `spanId` that was active on that
+thread at capture time. Dynatrace sets these as first-class fields on the OTLP log
+record, so you can navigate from a slow trace directly to the profile that explains it.
+
+### Option 1 — Flask (automatic, one line)
+
+Requires `opentelemetry-api` to be installed alongside your OTel tracing SDK.
+
+```python
+from dt_profiler import start_profiler, init_flask_profiling
+from flask import Flask
+
+start_profiler()
+app = Flask(__name__)
+init_flask_profiling(app)   # registers before_request / teardown hooks
+```
+
+Install the optional dependency:
+
+```bash
+pip install "dt-otlp-profiler[otel]"
+# or: pip install ./sdk/python[otel]
+```
+
+### Option 2 — Any framework (context manager)
+
+Wrap each request handler with `auto_trace_context()`. It reads the active OTel span
+automatically, or is a no-op if `opentelemetry-api` is not installed:
+
+```python
+from dt_profiler import auto_trace_context
+
+def handle_request():
+    with auto_trace_context():
+        # profile samples here carry the current trace/span IDs
+        do_work()
+```
+
+### Option 3 — Manual (no OTel dependency)
+
+If you have trace IDs from another source (e.g., a header you parse yourself):
+
+```python
+from dt_profiler import trace_context
+
+def handle_request(trace_id, span_id):
+    with trace_context(trace_id=trace_id, span_id=span_id):
+        do_work()
+```
+
+### Querying correlated profiles in Dynatrace
+
+```dql
+// Top CPU consumers for one specific trace
+fetch logs
+| filter log.source == "continuous_profiler" and trace.id == "4bf92f3577b34da6a3ce929d0e0e4736"
+| summarize cpu_ms = sum(toLong(profile.cpu_ns)) / 1000000, by:{profile.leaf_function}
+| sort cpu_ms desc
+
+// All traces that touched a hot function
+fetch logs
+| filter log.source == "continuous_profiler" and profile.leaf_function == "slow_db_query"
+| fields trace.id, span.id, profile.cpu_ns, profile.leaf_file, profile.leaf_line
+| sort profile.cpu_ns desc
+
+// Compare CPU breakdown across two traces
+fetch logs
+| filter log.source == "continuous_profiler"
+  and trace.id in ("aaa...", "bbb...")
+| summarize cpu_ms = sum(toLong(profile.cpu_ns)) / 1000000,
+            by:{trace.id, profile.leaf_function}
+```
+
+Dynatrace also reads `traceId`/`spanId` as native OTLP log record fields, so these
+profile records appear in the **Logs** side panel of the **Distributed Traces** view
+without any additional configuration.
 
 ---
 

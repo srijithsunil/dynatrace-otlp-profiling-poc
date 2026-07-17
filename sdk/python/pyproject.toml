@@ -4,7 +4,7 @@ build-backend = "setuptools.backends.legacy:build"
 
 [project]
 name = "dt-otlp-profiler"
-version = "0.1.0"
+version = "0.2.0"
 description = "Dynatrace OTLP continuous profiler — Python SDK"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "flask", "django"]
+otel = ["opentelemetry-api>=1.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]
