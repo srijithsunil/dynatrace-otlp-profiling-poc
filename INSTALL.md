@@ -611,28 +611,85 @@ Pyroscope.start();
 dotnet add package Pyroscope
 ```
 
+.NET Core runs on **CoreCLR** — env vars use the `CORECLR_` prefix. The profiler native library
+is a `.so` on Linux/macOS and a `.dll` on Windows.
+
+Linux / Docker:
+
 ```bash
+CORECLR_ENABLE_PROFILING=1 \
+CORECLR_PROFILER="{BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}" \
+CORECLR_PROFILER_PATH=/app/Pyroscope.Profiler.Native.so \
 PYROSCOPE_SERVER_ADDRESS=http://otel-collector:4040 \
 PYROSCOPE_APPLICATION_NAME=my-dotnet-service \
 dotnet run
 ```
 
-*.NET Framework 4.6+ (NuGet Package Manager):*
+Windows (PowerShell):
 
 ```powershell
+$env:CORECLR_ENABLE_PROFILING = "1"
+$env:CORECLR_PROFILER = "{BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}"
+$env:CORECLR_PROFILER_PATH = ".\Pyroscope.Profiler.Native.dll"
+$env:PYROSCOPE_SERVER_ADDRESS = "http://otel-collector:4040"
+$env:PYROSCOPE_APPLICATION_NAME = "my-dotnet-service"
+dotnet run
+```
+
+Docker Compose:
+
+```yaml
+services:
+  my-dotnet-service:
+    image: mcr.microsoft.com/dotnet/aspnet:8.0
+    environment:
+      - CORECLR_ENABLE_PROFILING=1
+      - CORECLR_PROFILER={BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}
+      - CORECLR_PROFILER_PATH=/app/Pyroscope.Profiler.Native.so
+      - PYROSCOPE_SERVER_ADDRESS=http://otel-collector:4040
+      - PYROSCOPE_APPLICATION_NAME=my-dotnet-service
+```
+
+*.NET Framework 4.6+ (Windows only):*
+
+```powershell
+# Package Manager Console (Visual Studio)
 Install-Package Pyroscope
 ```
 
-Set environment variables before launching the process:
+.NET Framework uses the classic **CLR** runtime — env vars use the `COR_` prefix (no `CORE`).
+The profiler is always a `.dll`. Framework apps run on Windows only.
+
+PowerShell (console app / Windows Service):
 
 ```powershell
+$env:COR_ENABLE_PROFILING = "1"
+$env:COR_PROFILER = "{BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}"
+$env:COR_PROFILER_PATH = "C:\inetpub\wwwroot\MyApp\bin\Pyroscope.Profiler.Native.dll"
 $env:PYROSCOPE_SERVER_ADDRESS = "http://otel-collector:4040"
 $env:PYROSCOPE_APPLICATION_NAME = "my-dotnet-service"
 .\MyApp.exe
 ```
 
-For IIS-hosted apps, set the variables in `web.config` under
-`<system.webServer><aspNetCore><environmentVariables>` — no code changes needed.
+IIS — `web.config` (no code changes):
+
+```xml
+<configuration>
+  <system.webServer>
+    <environmentVariables>
+      <environmentVariable name="COR_ENABLE_PROFILING" value="1" />
+      <environmentVariable name="COR_PROFILER"
+                           value="{BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}" />
+      <environmentVariable name="COR_PROFILER_PATH"
+                           value="C:\inetpub\wwwroot\MyApp\bin\Pyroscope.Profiler.Native.dll" />
+      <environmentVariable name="PYROSCOPE_SERVER_ADDRESS"
+                           value="http://otel-collector:4040" />
+      <environmentVariable name="PYROSCOPE_APPLICATION_NAME"
+                           value="my-dotnet-service" />
+    </environmentVariables>
+  </system.webServer>
+</configuration>
+```
 
 > **Tip**: If you are on ASP.NET Core 8+ and want richer profiling without a Collector,
 > use the [C# SDK path](#c-sdk-path) instead.

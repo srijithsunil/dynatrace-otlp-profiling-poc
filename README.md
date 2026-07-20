@@ -463,51 +463,104 @@ node --require ./instrumentation.js app.js
 
 Full example: [`examples/nodejs/`](examples/nodejs/)
 
-### .NET — Core / .NET 5+ and Framework 4.6+
-
-Uses the **pyroscope .NET SDK**, which supports both runtimes and pushes pprof profiles directly to the Collector's pyroscope receiver.
-
-**.NET Core / .NET 5–9** — add via CLI:
+### .NET Core / .NET 5–9
 
 ```bash
 dotnet add package Pyroscope
 ```
 
-**.NET Framework 4.6+** — add via NuGet Package Manager console:
+.NET Core uses the **CoreCLR** runtime — env vars use the `CORECLR_` prefix. The profiler binary is a `.so` on Linux/macOS and a `.dll` on Windows.
 
-```powershell
-Install-Package Pyroscope
-```
-
-Configure via environment variables (works on all runtimes):
+**Linux / macOS (shell / Docker):**
 
 ```bash
-# .NET Core / Linux / macOS
+CORECLR_ENABLE_PROFILING=1 \
+CORECLR_PROFILER="{BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}" \
+CORECLR_PROFILER_PATH=/app/Pyroscope.Profiler.Native.so \
 PYROSCOPE_SERVER_ADDRESS=http://localhost:4040 \
 PYROSCOPE_APPLICATION_NAME=my-dotnet-service \
 dotnet run
 ```
 
+**Windows (PowerShell):**
+
 ```powershell
-# .NET Framework / Windows
+$env:CORECLR_ENABLE_PROFILING = "1"
+$env:CORECLR_PROFILER = "{BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}"
+$env:CORECLR_PROFILER_PATH = ".\Pyroscope.Profiler.Native.dll"
+$env:PYROSCOPE_SERVER_ADDRESS = "http://localhost:4040"
+$env:PYROSCOPE_APPLICATION_NAME = "my-dotnet-service"
+dotnet run
+```
+
+**`launchSettings.json`** (development, cross-platform):
+
+```json
+{
+  "profiles": {
+    "MyApp": {
+      "environmentVariables": {
+        "CORECLR_ENABLE_PROFILING": "1",
+        "CORECLR_PROFILER": "{BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}",
+        "CORECLR_PROFILER_PATH": "./Pyroscope.Profiler.Native.so",
+        "PYROSCOPE_SERVER_ADDRESS": "http://localhost:4040",
+        "PYROSCOPE_APPLICATION_NAME": "my-dotnet-service"
+      }
+    }
+  }
+}
+```
+
+**Docker Compose:**
+
+```yaml
+services:
+  my-dotnet-service:
+    image: mcr.microsoft.com/dotnet/aspnet:8.0
+    environment:
+      - CORECLR_ENABLE_PROFILING=1
+      - CORECLR_PROFILER={BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}
+      - CORECLR_PROFILER_PATH=/app/Pyroscope.Profiler.Native.so
+      - PYROSCOPE_SERVER_ADDRESS=http://otel-collector:4040
+      - PYROSCOPE_APPLICATION_NAME=my-dotnet-service
+```
+
+### .NET Framework 4.6+ (Windows only)
+
+```powershell
+# Package Manager Console (Visual Studio)
+Install-Package Pyroscope
+```
+
+.NET Framework uses the classic **CLR** runtime — env vars use the `COR_` prefix (no `CORE`), and the profiler is always a `.dll`. Framework apps run on Windows only.
+
+**PowerShell (console app / Windows Service):**
+
+```powershell
+$env:COR_ENABLE_PROFILING = "1"
+$env:COR_PROFILER = "{BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}"
+$env:COR_PROFILER_PATH = "C:\inetpub\wwwroot\MyApp\bin\Pyroscope.Profiler.Native.dll"
 $env:PYROSCOPE_SERVER_ADDRESS = "http://localhost:4040"
 $env:PYROSCOPE_APPLICATION_NAME = "my-dotnet-service"
 .\MyApp.exe
 ```
 
-IIS / `web.config` (no code changes):
+**IIS — `web.config`** (no code changes):
 
 ```xml
 <configuration>
   <system.webServer>
-    <aspNetCore>
-      <environmentVariables>
-        <environmentVariable name="PYROSCOPE_SERVER_ADDRESS"
-                             value="http://localhost:4040" />
-        <environmentVariable name="PYROSCOPE_APPLICATION_NAME"
-                             value="my-dotnet-service" />
-      </environmentVariables>
-    </aspNetCore>
+    <environmentVariables>
+      <environmentVariable name="COR_ENABLE_PROFILING" value="1" />
+      <environmentVariable name="COR_PROFILER"
+                           value="{BD1A650D-AC5D-4896-B64F-D6FA25D6B26A}" />
+      <environmentVariable name="COR_PROFILER_PATH"
+                           value="C:\inetpub\wwwroot\MyApp\bin\Pyroscope.Profiler.Native.dll" />
+      <environmentVariable name="PYROSCOPE_SERVER_ADDRESS"
+                           value="http://localhost:4040" />
+      <environmentVariable name="PYROSCOPE_APPLICATION_NAME"
+                           value="my-dotnet-service" />
+    </environmentVariables>
   </system.webServer>
 </configuration>
 ```
