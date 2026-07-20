@@ -152,3 +152,41 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
+
+  # ── C# ASP.NET Core profiling demo ─────────────────────────────────────────
+  # Same endpoints as the Python sample-app, on port 8081.
+  # Uses cooperative sampling: DtProfiler.Section() registers each code block
+  # so the 10ms timer can attribute CPU to the correct method name.
+  csharp-demo:
+    build:
+      context: .
+      dockerfile: examples/csharp/DtProfilingDemo/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - DT_ENDPOINT=${DT_ENDPOINT}
+      - DT_API_TOKEN=${DT_API_TOKEN}
+      - OTEL_SERVICE_NAME=csharp-profiling-demo
+      - OTEL_SERVICE_VERSION=1.0.0
+      - DEPLOYMENT_ENV=poc
+    depends_on:
+      - validator
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

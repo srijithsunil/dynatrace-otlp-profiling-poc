@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PackageId>DynatraceOtlpProfiler</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Dynatrace continuous profiler for .NET — exports stack samples as OTLP Logs.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+    <!-- Gives access to IApplicationBuilder, HttpContext, etc. for AspNetCoreExtensions.
+         Consumers who don't use ASP.NET Core can ignore those extension methods. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>
