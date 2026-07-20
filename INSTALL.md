@@ -6,7 +6,7 @@
 |---|---|
 | **Python app** — want the fastest integration | [Python SDK](#python-sdk-path) — 2 lines of code |
 | **C# / ASP.NET Core app** | [C# SDK](#c-sdk-path) — 3 lines of code |
-| **Java / Go / Node.js** — no code changes preferred | [Collector path](#collector-path-any-language) — point your profiler at the collector |
+| **Java / Go / Node.js / .NET** — no code changes preferred | [Collector path](#collector-path-any-language) — point your profiler at the collector |
 | **Starting from scratch** — want the full demo | [Path A — Docker Compose](#path-a--docker-compose-quick-start) |
 | **Already have an OTel Collector** | [Path B — Existing Collector](#path-b--existing-otel-collector) |
 | **Kubernetes** | [Path C — OTel Operator](#path-c--kubernetes--otel-operator) |
@@ -604,6 +604,38 @@ Pyroscope.init({ serverAddress: 'http://otel-collector:4040',
                  appName: 'my-node-service' });
 Pyroscope.start();
 ```
+
+*.NET Core / .NET 5–9:*
+
+```bash
+dotnet add package Pyroscope
+```
+
+```bash
+PYROSCOPE_SERVER_ADDRESS=http://otel-collector:4040 \
+PYROSCOPE_APPLICATION_NAME=my-dotnet-service \
+dotnet run
+```
+
+*.NET Framework 4.6+ (NuGet Package Manager):*
+
+```powershell
+Install-Package Pyroscope
+```
+
+Set environment variables before launching the process:
+
+```powershell
+$env:PYROSCOPE_SERVER_ADDRESS = "http://otel-collector:4040"
+$env:PYROSCOPE_APPLICATION_NAME = "my-dotnet-service"
+.\MyApp.exe
+```
+
+For IIS-hosted apps, set the variables in `web.config` under
+`<system.webServer><aspNetCore><environmentVariables>` — no code changes needed.
+
+> **Tip**: If you are on ASP.NET Core 8+ and want richer profiling without a Collector,
+> use the [C# SDK path](#c-sdk-path) instead.
 
 ### Step 4 — Set environment variables
 

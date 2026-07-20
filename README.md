@@ -401,7 +401,7 @@ without any additional configuration.
 
 ---
 
-## Add profiling to Java, Go, or Node.js apps
+## Add profiling to Java, Go, Node.js, or .NET apps
 
 Run just the infrastructure alongside your existing app:
 
@@ -462,6 +462,57 @@ node --require ./instrumentation.js app.js
 ```
 
 Full example: [`examples/nodejs/`](examples/nodejs/)
+
+### .NET — Core / .NET 5+ and Framework 4.6+
+
+Uses the **pyroscope .NET SDK**, which supports both runtimes and pushes pprof profiles directly to the Collector's pyroscope receiver.
+
+**.NET Core / .NET 5–9** — add via CLI:
+
+```bash
+dotnet add package Pyroscope
+```
+
+**.NET Framework 4.6+** — add via NuGet Package Manager console:
+
+```powershell
+Install-Package Pyroscope
+```
+
+Configure via environment variables (works on all runtimes):
+
+```bash
+# .NET Core / Linux / macOS
+PYROSCOPE_SERVER_ADDRESS=http://localhost:4040 \
+PYROSCOPE_APPLICATION_NAME=my-dotnet-service \
+dotnet run
+```
+
+```powershell
+# .NET Framework / Windows
+$env:PYROSCOPE_SERVER_ADDRESS = "http://localhost:4040"
+$env:PYROSCOPE_APPLICATION_NAME = "my-dotnet-service"
+.\MyApp.exe
+```
+
+IIS / `web.config` (no code changes):
+
+```xml
+<configuration>
+  <system.webServer>
+    <aspNetCore>
+      <environmentVariables>
+        <environmentVariable name="PYROSCOPE_SERVER_ADDRESS"
+                             value="http://localhost:4040" />
+        <environmentVariable name="PYROSCOPE_APPLICATION_NAME"
+                             value="my-dotnet-service" />
+      </environmentVariables>
+    </aspNetCore>
+  </system.webServer>
+</configuration>
+```
+
+> **Note**: If you are already on ASP.NET Core, the [C# SDK](#add-profiling-to-your-own-c-app) is a lighter alternative — no OTel Collector required.
 
 ---
 
