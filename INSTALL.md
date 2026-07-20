@@ -70,10 +70,11 @@ profiles go directly from your app to Dynatrace, on port **8081** by default.
 ### Step 1 — Reference the SDK
 
 ```bash
-# From repo root — add a ProjectReference to your .csproj
-dotnet add reference sdk/csharp/DynatraceOtlpProfiler/DynatraceOtlpProfiler.csproj
+# Via NuGet (recommended)
+dotnet add package DynatraceOtlpProfiler
 
-# Coming soon: dotnet add package DynatraceOtlpProfiler
+# Or via ProjectReference from this repo
+dotnet add reference sdk/csharp/DynatraceOtlpProfiler/DynatraceOtlpProfiler.csproj
 ```
 
 ### Step 2 — Start the profiler in `Program.cs`

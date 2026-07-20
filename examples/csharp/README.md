@@ -69,11 +69,11 @@ The C# demo listens on **port 8081**. Endpoints:
 ### 1 — Reference the SDK
 
 ```bash
-# From your project directory (adjust the path):
-dotnet add reference ../../sdk/csharp/DynatraceOtlpProfiler/DynatraceOtlpProfiler.csproj
+# Via NuGet (recommended)
+dotnet add package DynatraceOtlpProfiler
 
-# Or once published to NuGet:
-# dotnet add package DynatraceOtlpProfiler
+# Or via ProjectReference from this repo (adjust the path):
+dotnet add reference ../../sdk/csharp/DynatraceOtlpProfiler/DynatraceOtlpProfiler.csproj
 ```
 
 ### 2 — Start the profiler in `Program.cs`

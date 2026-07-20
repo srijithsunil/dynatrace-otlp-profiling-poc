@@ -239,10 +239,11 @@ RUN pip install /sdk/python
 ### Reference the SDK
 
 ```bash
-# From repo root
-dotnet add reference sdk/csharp/DynatraceOtlpProfiler/DynatraceOtlpProfiler.csproj
+# Via NuGet (recommended)
+dotnet add package DynatraceOtlpProfiler
 
-# Coming soon: dotnet add package DynatraceOtlpProfiler
+# Or via ProjectReference from this repo
+dotnet add reference sdk/csharp/DynatraceOtlpProfiler/DynatraceOtlpProfiler.csproj
 ```
 
 ### Integrate (3 lines)
