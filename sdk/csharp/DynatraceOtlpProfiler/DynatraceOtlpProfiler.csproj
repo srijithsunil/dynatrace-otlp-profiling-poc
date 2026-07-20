@@ -3,10 +3,43 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- NuGet package identity -->
     <PackageId>DynatraceOtlpProfiler</PackageId>
     <Version>0.1.0</Version>
-    <Description>Dynatrace continuous profiler for .NET — exports stack samples as OTLP Logs.</Description>
+    <Authors>Srijith Sunil</Authors>
+    <Company>Dynatrace</Company>
+    <Copyright>Copyright © 2026 Srijith Sunil</Copyright>
+
+    <!-- NuGet listing -->
+    <Title>Dynatrace OTLP Continuous Profiler for .NET</Title>
+    <Description>
+      Continuous CPU profiler for ASP.NET Core 8+ that exports stack samples as OTLP Logs
+      directly to Dynatrace. Cooperative sampler (10 ms timer), per-request middleware
+      (UseDtProfiling), trace correlation via Activity.Current, retry + circuit breaker on export.
+      No OTel Collector required.
+    </Description>
+    <PackageTags>dynatrace;profiling;otlp;opentelemetry;apm;continuous-profiling;aspnetcore</PackageTags>
+    <PackageProjectUrl>https://github.com/srijithsunil/dynatrace-otlp-profiling-poc</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/srijithsunil/dynatrace-otlp-profiling-poc</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+
+    <!-- Deterministic build + Source Link friendly -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Bundle the README into the package -->
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
     <!-- Gives access to IApplicationBuilder, HttpContext, etc. for AspNetCoreExtensions.
