@@ -15,6 +15,7 @@
 | Language-agnostic pipeline | OTel Collector accepts pprof from Go, Java, Python, Node.js, .NET |
 | Full stack traces | Complete call chains captured, not just leaf functions |
 | Zero instrumentation | Wall-clock sampling — no code changes to the profiled app |
+| C# / ASP.NET Core SDK | Native .NET 8 SDK — cooperative sampler, same OTLP output, `UseDtProfiling()` middleware |
 
 ---
 
@@ -233,6 +234,91 @@ RUN pip install /sdk/python
 
 ---
 
+## Add profiling to your own C# app
+
+### Reference the SDK
+
+```bash
+# From repo root
+dotnet add reference sdk/csharp/DynatraceOtlpProfiler/DynatraceOtlpProfiler.csproj
+
+# Coming soon: dotnet add package DynatraceOtlpProfiler
+```
+
+### Integrate (3 lines)
+
+```csharp
+using DynatraceOtlpProfiler;
+
+DtProfiler.Start();     // reads DT_ENDPOINT / DT_API_TOKEN from env
+app.UseDtProfiling();   // per-request profiling scope + auto trace correlation
+```
+
+Call `DtProfiler.Start()` before `app.Run()`. `UseDtProfiling()` registers ASP.NET Core
+middleware that opens a profiling scope for each HTTP request.
+
+### Environment variables
+
+```bash
+export DT_ENDPOINT=https://your-env-id.live.dynatrace.com
+export DT_API_TOKEN=dt0c01.XXXXXXXXXX
+export OTEL_SERVICE_NAME=my-csharp-service
+export DEPLOYMENT_ENV=production
+```
+
+### Get method-level attribution
+
+Unlike the Python SDK (which samples full thread stacks), the C# SDK uses a cooperative
+model. Wrap CPU-heavy methods with `DtProfiler.Section()` to see method names in Dynatrace
+instead of just route names:
+
+```csharp
+using (DtProfiler.Section("ParseCsvFile"))
+{
+    ProcessFile(path);   // every 10ms tick records "ParseCsvFile" as the leaf function
+}
+```
+
+### Framework integrations
+
+**ASP.NET Core Web API**
+```csharp
+// Program.cs
+DtProfiler.Start(loggerFactory: app.Services.GetRequiredService<ILoggerFactory>());
+app.UseDtProfiling();
+app.MapControllers();
+app.Run();
+```
+
+**ASP.NET Core Minimal API**
+```csharp
+DtProfiler.Start();
+app.UseDtProfiling();
+
+app.MapGet("/report", () => {
+    using (DtProfiler.Section("GenerateReport")) GenerateReport();
+    return Results.Ok();
+});
+```
+
+**Docker**
+```dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY sdk/csharp/DynatraceOtlpProfiler/ sdk/csharp/DynatraceOtlpProfiler/
+COPY MyApp/ MyApp/
+RUN dotnet publish MyApp -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+WORKDIR /app
+COPY --from=build /app .
+ENTRYPOINT ["dotnet", "MyApp.dll"]
+```
+
+Full example and trace correlation options: [`examples/csharp/`](examples/csharp/)
+
+---
+
 ## Trace correlation — link profiles to distributed traces
 
 By default the profiler aggregates hotspots globally. With trace correlation enabled,
@@ -436,27 +522,38 @@ flowchart TD
 ## Repository layout
 
 ```
-├── sdk/python/                   Python SDK (pip-installable)
-│   ├── dt_profiler/
-│   │   ├── __init__.py           start_profiler() / stop_profiler()
-│   │   ├── sampler.py            Wall-clock stack sampler
-│   │   └── otlp_exporter.py      OTLP Profile builder + HTTP exporter
-│   ├── pyproject.toml
-│   └── README.md
+├── sdk/
+│   ├── python/                   Python SDK (pip-installable)
+│   │   ├── dt_profiler/
+│   │   │   ├── __init__.py       start_profiler() / stop_profiler()
+│   │   │   ├── sampler.py        Wall-clock stack sampler (sys._current_frames())
+│   │   │   └── otlp_exporter.py  OTLP Logs builder + HTTP exporter
+│   │   ├── pyproject.toml
+│   │   └── README.md
+│   └── csharp/                   C# SDK (.NET 8, ProjectReference or NuGet)
+│       └── DynatraceOtlpProfiler/
+│           ├── Profiler.cs       DtProfiler.Start/Stop/Section/TraceContext
+│           ├── StackSampler.cs   10ms cooperative sampler (ConcurrentDictionary)
+│           ├── OtlpExporter.cs   OTLP Logs builder + HttpClient + retry
+│           ├── SamplingContext.cs IDisposable profiling scope
+│           └── AspNetCoreExtensions.cs  UseDtProfiling() middleware
 │
 ├── examples/
 │   ├── python-flask/             Minimal Flask + SDK working example
 │   ├── python-django/            Django / Gunicorn integration guide
+│   ├── csharp/                   ASP.NET Core demo + integration guide
+│   │   ├── README.md
+│   │   └── DtProfilingDemo/      /fibonacci /primes /matrix /sort on port 8081
 │   ├── java/                     async-profiler + Spring Boot guide
 │   ├── go/                       stdlib pprof + push loop (zero deps)
 │   └── nodejs/                   OTel Node.js SDK guide
 │
-├── docker-compose.yml            Full demo stack (sample app + infra)
+├── docker-compose.yml            Full demo stack (Python + C# apps + infra)
 ├── docker-compose.infra.yml      Collector only — bolt onto existing setup
 │
 ├── collector/config.yaml         OTel Collector pipeline config
 ├── validator/server.py           Local OTLP endpoint — prints flame graphs to stdout
-├── sample-app/                   Demo Flask app (uses the SDK)
+├── sample-app/                   Demo Flask app (uses the Python SDK)
 ├── load-generator/               Drives load against demo endpoints
 │
 ├── docs/architecture.md          Full architecture diagrams (Mermaid)
@@ -480,4 +577,21 @@ Check the sample-app logs: `docker compose logs sample-app`. Confirm `DT_ENDPOIN
 Usually a bad `collector/config.yaml`. Run `docker compose logs otel-collector` — the error message names the offending field.
 
 **Port already in use**
-Change the host-side port mapping in `docker-compose.yml`, e.g. `"8081:8080"`.
+Change the host-side port mapping in `docker-compose.yml`, e.g. `"8082:8081"` for the C# demo.
+
+**C# demo: no profiles after 30s**
+Ensure the container is receiving traffic — the cooperative sampler only records samples
+while a `DtProfiler.Section()` or `UseDtProfiling()` scope is active. Hit an endpoint:
+
+```bash
+curl http://localhost:8081/fibonacci?n=35
+curl http://localhost:8081/matrix?size=100
+```
+
+**C# demo: `DT_ENDPOINT` connection refused**
+In Docker Compose the C# demo resolves `validator` by service name. Outside Docker,
+use `http://localhost:8888` as the endpoint.
+
+**C#: profiles show route name instead of method name**
+The middleware profiles at route level by default (`GET /fibonacci`). Wrap the hot
+method in `DtProfiler.Section("MethodName")` to get method-level attribution.

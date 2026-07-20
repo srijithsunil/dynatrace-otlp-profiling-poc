@@ -5,6 +5,7 @@
 | Your situation | Path |
 |---|---|
 | **Python app** — want the fastest integration | [Python SDK](#python-sdk-path) — 2 lines of code |
+| **C# / ASP.NET Core app** | [C# SDK](#c-sdk-path) — 3 lines of code |
 | **Java / Go / Node.js** — no code changes preferred | [Collector path](#collector-path-any-language) — point your profiler at the collector |
 | **Starting from scratch** — want the full demo | [Path A — Docker Compose](#path-a--docker-compose-quick-start) |
 | **Already have an OTel Collector** | [Path B — Existing Collector](#path-b--existing-otel-collector) |
@@ -58,6 +59,195 @@ export DT_API_TOKEN=dev
 python your-app.py
 # Validator logs show flame-graph summaries every 30s
 ```
+
+---
+
+## C# SDK path
+
+The fastest way to add profiling to an ASP.NET Core app. No OTel Collector needed —
+profiles go directly from your app to Dynatrace, on port **8081** by default.
+
+### Step 1 — Reference the SDK
+
+```bash
+# From repo root — add a ProjectReference to your .csproj
+dotnet add reference sdk/csharp/DynatraceOtlpProfiler/DynatraceOtlpProfiler.csproj
+
+# Coming soon: dotnet add package DynatraceOtlpProfiler
+```
+
+### Step 2 — Start the profiler in `Program.cs`
+
+```csharp
+using DynatraceOtlpProfiler;
+
+// Call before app.Run() — reads DT_ENDPOINT / DT_API_TOKEN from env.
+DtProfiler.Start(loggerFactory: app.Services.GetRequiredService<ILoggerFactory>());
+
+// Register per-request middleware — opens a profiling scope for each HTTP request
+// and reads Activity.Current for trace/span IDs automatically.
+app.UseDtProfiling();
+```
+
+### Step 3 — Annotate CPU-heavy methods
+
+Wrap any CPU-intensive block with `DtProfiler.Section()`. The name you supply becomes
+`profile.leaf_function` in Dynatrace — this is how you get method-level attribution
+instead of just endpoint-level:
+
+```csharp
+using (DtProfiler.Section("ParseCsvFile", file: "MyService.cs", line: 42))
+{
+    // Every 10ms timer tick while this block is running records "ParseCsvFile"
+    ProcessFile(path);
+}
+```
+
+Without `DtProfiler.Section()`, the middleware still profiles at route level (e.g.
+`GET /upload`). Use `Section()` to drill down to the specific method.
+
+### Configure via environment variables
+
+```bash
+export DT_ENDPOINT=https://your-env-id.live.dynatrace.com
+export DT_API_TOKEN=dt0c01.XXXXXXXXXX
+export OTEL_SERVICE_NAME=my-csharp-service
+export OTEL_SERVICE_VERSION=1.0.0
+export DEPLOYMENT_ENV=production
+```
+
+### Framework integrations
+
+**ASP.NET Core Minimal API**
+```csharp
+// Program.cs
+using DynatraceOtlpProfiler;
+
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+DtProfiler.Start(loggerFactory: app.Services.GetRequiredService<ILoggerFactory>());
+app.UseDtProfiling();
+
+app.MapGet("/work", () =>
+{
+    using (DtProfiler.Section("DoWork"))
+        DoWork();
+    return Results.Ok();
+});
+
+app.Run();
+```
+
+**ASP.NET Core MVC / Web API**
+```csharp
+// Program.cs
+DtProfiler.Start(loggerFactory: app.Services.GetRequiredService<ILoggerFactory>());
+app.UseDtProfiling();   // place before UseRouting() / MapControllers()
+app.MapControllers();
+app.Run();
+```
+
+```csharp
+// In your controller
+[HttpGet("/fibonacci")]
+public IActionResult Fibonacci([FromQuery] int n = 30)
+{
+    using (DtProfiler.Section("Fibonacci"))
+        return Ok(new { result = Fib(n) });
+}
+```
+
+**Generic .NET (no web host)**
+```csharp
+using DynatraceOtlpProfiler;
+
+DtProfiler.Start();   // reads env vars
+
+// Wrap work you want to attribute
+using (DtProfiler.Section("ProcessBatch"))
+{
+    ProcessBatch(items);
+}
+
+// On shutdown (or call DtProfiler.Stop() explicitly)
+// ProcessExit and CancelKeyPress are registered automatically.
+```
+
+**Docker**
+```dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# Copy SDK source (adjust path to match your layout)
+COPY sdk/csharp/DynatraceOtlpProfiler/ sdk/csharp/DynatraceOtlpProfiler/
+COPY MyApp/ MyApp/
+
+WORKDIR /src/MyApp
+RUN dotnet publish -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+WORKDIR /app
+COPY --from=build /app .
+ENV ASPNETCORE_URLS=http://+:8081
+EXPOSE 8081
+ENTRYPOINT ["dotnet", "MyApp.dll"]
+```
+
+### Trace correlation
+
+`UseDtProfiling()` automatically reads `Activity.Current` (set by OTel ASP.NET Core
+instrumentation), so trace IDs appear on profile records with no extra work.
+
+For manual control or non-web code:
+
+```csharp
+// Auto-read from Activity.Current (requires opentelemetry-api):
+using (DtProfiler.AutoTraceContext("HandleRequest")) { … }
+
+// Explicit IDs (no OTel dependency):
+using (DtProfiler.TraceContext(traceId, spanId, "HandleRequest")) { … }
+```
+
+### Test locally first (no DT tenant)
+
+```bash
+docker compose up --build validator csharp-demo
+# C# demo → http://localhost:8081
+# Validator decodes profiles → stdout every 30s
+```
+
+Or run the app directly and point at the validator:
+
+```bash
+docker compose up -d validator
+
+export DT_ENDPOINT=http://localhost:8888
+export DT_API_TOKEN=dev
+export OTEL_SERVICE_NAME=my-csharp-service
+dotnet run --project sdk/csharp/../examples/csharp/DtProfilingDemo/DtProfilingDemo.csproj
+```
+
+### Querying C# profiles in Dynatrace
+
+The C# SDK produces the same OTLP log attributes as the Python SDK — the same DQL
+queries work for both:
+
+```dql
+// Top CPU consumers
+fetch logs
+| filter log.source == "continuous_profiler" and `service.name` == "my-csharp-service"
+| summarize cpu_ms = sum(toLong(profile.cpu_ns)) / 1000000, by:{profile.leaf_function}
+| sort cpu_ms desc
+
+// Hotspots for one specific trace
+fetch logs
+| filter log.source == "continuous_profiler" and trace.id == "<paste from response JSON>"
+| summarize cpu_ms = sum(toLong(profile.cpu_ns)) / 1000000, by:{profile.leaf_function}
+| sort cpu_ms desc
+```
+
+Full example: [`examples/csharp/`](examples/csharp/)
 
 ---
 
