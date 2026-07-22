@@ -18,6 +18,7 @@ namespace DynatraceOtlpProfiler;
 internal sealed class OtlpExporter : IDisposable
 {
     private readonly string _endpoint;
+    private readonly string _logsPath;
     private readonly string _serviceName;
     private readonly string _serviceVersion;
     private readonly string _environment;
@@ -40,9 +41,11 @@ internal sealed class OtlpExporter : IDisposable
         string environment,
         long   intervalNs,
         Dictionary<string, string>? extraAttrs,
-        ILogger logger)
+        ILogger logger,
+        string logsPath = "/api/v2/otlp/v1/logs")
     {
         _endpoint       = endpoint.TrimEnd('/');
+        _logsPath       = logsPath.StartsWith('/') ? logsPath : "/" + logsPath;
         _serviceName    = serviceName;
         _serviceVersion = serviceVersion;
         _environment    = environment;
@@ -51,8 +54,14 @@ internal sealed class OtlpExporter : IDisposable
         _logger         = logger;
 
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        _http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Api-Token", apiToken);
+        // Only attach the Authorization header when a token is provided.
+        // In-cluster collector routing (e.g. otel-collector:4318/v1/logs) is
+        // unauthenticated — sending `Api-Token ` (empty) would 401.
+        if (!string.IsNullOrEmpty(apiToken))
+        {
+            _http.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Api-Token", apiToken);
+        }
         _http.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/json"));
     }
@@ -75,7 +84,7 @@ internal sealed class OtlpExporter : IDisposable
 
         var records = BuildLogRecords(samples, startNs, durationNs);
         var payload = BuildPayload(records);
-        var url     = $"{_endpoint}/api/v2/otlp/v1/logs";
+        var url     = $"{_endpoint}{_logsPath}";
         return await PostWithRetryAsync(url, payload, samples.Values.Sum(), durationNs);
     }
 
@@ -186,7 +195,13 @@ internal sealed class OtlpExporter : IDisposable
         {
             try
             {
-                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                // Dynatrace /api/v2/otlp/v1/logs (and some other OTLP HTTP
+                // receivers) reject the `charset=utf-8` parameter that
+                // StringContent(text, encoding, mediaType) appends. Set
+                // Content-Type explicitly to `application/json` with no
+                // charset suffix.
+                using var content = new StringContent(json, Encoding.UTF8);
+                content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
                 using var resp    = await _http.PostAsync(url, content);
                 var status = (int)resp.StatusCode;
 

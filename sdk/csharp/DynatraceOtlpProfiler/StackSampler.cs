@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace DynatraceOtlpProfiler;
 
 /// <summary>
-/// Fires a System.Threading.Timer every <paramref name="intervalMs"/> milliseconds
+/// Fires a System.Threading.Timer every <c>intervalMs</c> milliseconds
 /// and snapshots every registered SamplingContext.
 ///
 /// This is the .NET equivalent of Python's sys._current_frames() loop: instead of
@@ -92,8 +92,12 @@ internal sealed class StackSampler : IDisposable
         }
     }
 
+    // Unix-epoch nanoseconds. Stopwatch.GetTimestamp() is monotonic but its
+    // origin is arbitrary (typically system boot), so it must NOT be used
+    // directly as a wall-clock time — Dynatrace/OTLP consumers reject records
+    // whose `timeUnixNano` isn't near the current wall clock.
     private static long NowNs() =>
-        Stopwatch.GetTimestamp() * 1_000_000_000L / Stopwatch.Frequency;
+        (DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks) * 100L;
 
     public void Dispose() => Stop();
 }
