@@ -72,14 +72,24 @@ public static class DtProfiler
         serviceName = serviceName ?? Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME") ?? "unknown-service";
         environment = environment ?? Environment.GetEnvironmentVariable("DEPLOYMENT_ENV")    ?? "production";
 
+        // Optional overrides for routing through a collector instead of direct-to-tenant:
+        //   DT_PROFILER_LOGS_PATH — POST path (default `/api/v2/otlp/v1/logs`)
+        //   DT_PROFILER_AUTH      — "none" to skip the Authorization header
+        var logsPath = Environment.GetEnvironmentVariable("DT_PROFILER_LOGS_PATH");
+        if (string.IsNullOrEmpty(logsPath)) logsPath = "/api/v2/otlp/v1/logs";
+        var authMode = Environment.GetEnvironmentVariable("DT_PROFILER_AUTH");
+        if (string.Equals(authMode, "none", StringComparison.OrdinalIgnoreCase))
+            apiToken = "";
+
         if (string.IsNullOrEmpty(endpoint))
             _logger.LogWarning(
                 "DT_ENDPOINT not set — profiler will sample stacks but not export. " +
-                "Set DT_ENDPOINT to your Dynatrace tenant URL.");
-        if (string.IsNullOrEmpty(apiToken))
+                "Set DT_ENDPOINT to your Dynatrace tenant URL or an OTel Collector URL.");
+        if (string.IsNullOrEmpty(apiToken) && !string.Equals(authMode, "none", StringComparison.OrdinalIgnoreCase))
             _logger.LogWarning(
                 "DT_API_TOKEN not set — exports will be rejected with 401. " +
-                "Set DT_API_TOKEN to a token with logs.ingest scope.");
+                "Set DT_API_TOKEN to a token with logs.ingest scope, or set DT_PROFILER_AUTH=none " +
+                "when routing through an in-cluster collector.");
 
         var attrs = new Dictionary<string, string>
         {
@@ -91,7 +101,7 @@ public static class DtProfiler
         _sampler  = new StackSampler(sampleIntervalMs, _logger);
         _exporter = new OtlpExporter(
             endpoint, apiToken, serviceName, serviceVersion, environment,
-            sampleIntervalMs * 1_000_000L, attrs, _logger);
+            sampleIntervalMs * 1_000_000L, attrs, _logger, logsPath);
 
         _sampler.Start();
         _running = true;
@@ -103,9 +113,9 @@ public static class DtProfiler
         Console.CancelKeyPress              += (_, _) => Stop();
 
         _logger.LogInformation(
-            "DtProfiler {v} started — service={s} interval={i}ms flush={f}s target={t}",
+            "DtProfiler {v} started — service={s} interval={i}ms flush={f}s target={t}{p}",
             Version, serviceName, sampleIntervalMs, flushIntervalS,
-            string.IsNullOrEmpty(endpoint) ? "(no endpoint set)" : endpoint);
+            string.IsNullOrEmpty(endpoint) ? "(no endpoint set)" : endpoint, logsPath);
     }
 
     /// <summary>
