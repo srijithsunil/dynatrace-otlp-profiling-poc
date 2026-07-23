@@ -5,9 +5,11 @@ to Dynatrace — no OTel Collector required.
 
 ## How it works
 
-A 10 ms timer samples all active profiling scopes cooperatively. Every 30 seconds the
-frequency map is serialised as OTLP log records (`log.source = "continuous_profiler"`)
-and POSTed to your Dynatrace tenant. Query results in DQL:
+Uses the .NET runtime's **EventPipe** (`Microsoft-DotNETCore-SampleProfiler`) to capture
+real managed call stacks every 10 ms — the .NET equivalent of Python's `sys._current_frames()`.
+`profile.leaf_function` reflects what the CPU is *actually* executing at each sample point,
+not a static label. Every 30 seconds the frequency map is serialised as OTLP log records
+(`log.source = "continuous_profiler"`) and POSTed to your Dynatrace tenant. Query results in DQL:
 
 ```dql
 fetch logs
