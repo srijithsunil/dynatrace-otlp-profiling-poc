@@ -6,14 +6,12 @@ namespace DynatraceOtlpProfiler;
 public static class AspNetCoreExtensions
 {
     /// <summary>
-    /// Registers DtProfiler middleware that creates one profiling scope per HTTP request.
+    /// Registers DtProfiler middleware that marks each HTTP request thread as a
+    /// profiling scope for the duration of the request.
     ///
-    /// The initial leaf function name is "{METHOD} {Path}". Once routing completes
-    /// (inside OnStarting), it is refined to the matched endpoint's display name so
-    /// you see e.g. "GET /fibonacci" rather than a generic route pattern.
-    ///
-    /// Trace/span IDs are read from Activity.Current, which is set automatically by
-    /// OpenTelemetry ASP.NET Core instrumentation (AddAspNetCoreInstrumentation).
+    /// While the scope is active, EventPipe samples the thread's real call stack
+    /// every 10 ms.  Trace/span IDs are read from Activity.Current, set automatically
+    /// by OpenTelemetry ASP.NET Core instrumentation (AddAspNetCoreInstrumentation).
     ///
     /// Usage in Program.cs:
     ///   app.UseDtProfiling();   // call after UseRouting, before MapControllers
@@ -22,19 +20,7 @@ public static class AspNetCoreExtensions
     {
         return app.Use(async (context, next) =>
         {
-            var sectionName = $"{context.Request.Method} {context.Request.Path}";
-            using var scope = DtProfiler.AutoTraceContext(sectionName);
-
-            // Refine the section name once the matched route is known.
-            // OnStarting fires before the first response byte is written.
-            context.Response.OnStarting(() =>
-            {
-                var endpoint = context.GetEndpoint();
-                if (endpoint?.DisplayName is { } name && scope is SamplingContext sc)
-                    sc.UpdateFunction(name);
-                return Task.CompletedTask;
-            });
-
+            using var _ = DtProfiler.AutoTraceContext($"{context.Request.Method} {context.Request.Path}");
             await next(context);
         });
     }

@@ -92,9 +92,22 @@ internal sealed class OtlpExporter : IDisposable
         {
             var cpuNs = count * _intervalNs;
 
-            var body = string.IsNullOrEmpty(key.LeafFile)
-                ? $"  in {key.LeafFunction}"
-                : $"  File \"{key.LeafFile}\", line {key.LeafLine}, in {key.LeafFunction}";
+            // Show a condensed view: root → ... → leaf (matches Python traceback style).
+            string body;
+            if (key.StackDepth <= 1 || key.RootFunction == key.LeafFunction)
+            {
+                body = string.IsNullOrEmpty(key.LeafFile)
+                    ? $"  in {key.LeafFunction}"
+                    : $"  File \"{key.LeafFile}\", line {key.LeafLine}, in {key.LeafFunction}";
+            }
+            else
+            {
+                var middle = key.StackDepth > 2 ? $"\n  ... ({key.StackDepth - 2} frames) ...\n" : "\n";
+                var leaf   = string.IsNullOrEmpty(key.LeafFile)
+                    ? $"  in {key.LeafFunction}"
+                    : $"  File \"{key.LeafFile}\", line {key.LeafLine}, in {key.LeafFunction}";
+                body = $"  in {key.RootFunction}{middle}{leaf}";
+            }
 
             var attrs = new List<object>
             {
@@ -146,7 +159,7 @@ internal sealed class OtlpExporter : IDisposable
             Attr("deployment.environment", _environment),
             Attr("telemetry.sdk.name",     "dynatrace-otlp-profiler"),
             Attr("telemetry.sdk.language", "csharp"),
-            Attr("telemetry.sdk.version",  "0.1.0"),
+            Attr("telemetry.sdk.version",  "0.2.0"),
         };
         foreach (var (k, v) in _extraAttrs)
             resAttrs.Add(Attr(k, v));
@@ -162,7 +175,7 @@ internal sealed class OtlpExporter : IDisposable
                     {
                         new
                         {
-                            scope      = new { name = "dynatrace-otlp-profiler", version = "0.1.0" },
+                            scope      = new { name = "dynatrace-otlp-profiler", version = "0.2.0" },
                             logRecords = records,
                         }
                     }

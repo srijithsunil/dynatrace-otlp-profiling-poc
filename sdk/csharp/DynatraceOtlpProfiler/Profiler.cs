@@ -32,7 +32,7 @@ public static class DtProfiler
     private static volatile bool              _running;
     private static ILogger                    _logger = NullLogger.Instance;
 
-    public const string Version = "0.1.0";
+    public const string Version = "0.2.0";
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -103,7 +103,7 @@ public static class DtProfiler
         Console.CancelKeyPress              += (_, _) => Stop();
 
         _logger.LogInformation(
-            "DtProfiler {v} started — service={s} interval={i}ms flush={f}s target={t}",
+            "DtProfiler {v} started (EventPipe) — service={s} interval={i}ms flush={f}s target={t}",
             Version, serviceName, sampleIntervalMs, flushIntervalS,
             string.IsNullOrEmpty(endpoint) ? "(no endpoint set)" : endpoint);
     }
@@ -149,8 +149,12 @@ public static class DtProfiler
     // ── Profiling scope helpers ───────────────────────────────────────────────
 
     /// <summary>
-    /// Opens a named profiling section on the current execution context.
-    /// <c>name</c> appears as <c>profile.leaf_function</c> in Dynatrace.
+    /// Marks the current thread as inside a named profiling scope.
+    ///
+    /// While the scope is active, EventPipe samples this thread's real call stack
+    /// every 10 ms and attributes the samples to it.  The <c>name</c> parameter is
+    /// used for logging only — <c>profile.leaf_function</c> in Dynatrace is the
+    /// actual innermost managed frame, not this label.
     ///
     ///   using (DtProfiler.Section("MatrixMultiply")) { DoWork(); }
     ///
@@ -164,9 +168,7 @@ public static class DtProfiler
         string? spanId  = null)
     {
         if (_sampler == null) return NullDisposable.Instance;
-        var ctx = new SamplingContext(_sampler.ActiveContexts, name, traceId ?? "", spanId ?? "");
-        ctx.UpdateFunction(name, file, line);
-        return ctx;
+        return new SamplingContext(_sampler.ActiveContexts, traceId ?? "", spanId ?? "");
     }
 
     /// <summary>
@@ -180,7 +182,7 @@ public static class DtProfiler
         string sectionName = "request")
     {
         if (_sampler == null) return NullDisposable.Instance;
-        return new SamplingContext(_sampler.ActiveContexts, sectionName, traceId, spanId);
+        return new SamplingContext(_sampler.ActiveContexts, traceId, spanId);
     }
 
     /// <summary>
@@ -196,7 +198,7 @@ public static class DtProfiler
         var activity = Activity.Current;
         var traceId  = activity?.TraceId.ToString() ?? "";
         var spanId   = activity?.SpanId.ToString()  ?? "";
-        return new SamplingContext(_sampler.ActiveContexts, sectionName, traceId, spanId);
+        return new SamplingContext(_sampler.ActiveContexts, traceId, spanId);
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────

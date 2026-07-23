@@ -7,35 +7,38 @@ Mirrors the Python `sample-app/` — same endpoints, same DQL queries, same trac
 
 ## How the C# profiler works
 
-Python can call `sys._current_frames()` to snapshot every OS thread's call stack at any
-moment. .NET has no equivalent managed API.
+Python can call `sys._current_frames()` to snapshot every OS thread's actual call stack at
+any moment. The C# SDK uses the **EventPipe** equivalent — the .NET runtime's own
+`Microsoft-DotNETCore-SampleProfiler` EventSource, which fires a `ThreadSample` event with
+a real managed call stack every 10 ms for every active thread.
 
-The C# SDK uses a **cooperative sampling** model instead:
-
-1. Each request (or named code section) calls `DtProfiler.AutoTraceContext()` or
-   `DtProfiler.Section("MethodName")` to create a `SamplingContext` and register it in a
-   shared `ConcurrentDictionary`.
-2. A `System.Threading.Timer` fires every 10 ms and iterates all registered contexts,
-   recording their current `LeafFunction` as one sample.
+1. Each request calls `DtProfiler.AutoTraceContext()` (via `app.UseDtProfiling()`) or
+   `DtProfiler.Section("MethodName")` to register the current thread in a shared dictionary.
+2. The EventPipe subscriber receives `ThreadSample` events every 10 ms, walks the thread's
+   real call stack innermost → outermost, and records the leaf function (actually executing
+   frame at that moment).
 3. After 30 seconds the sampler flushes: the frequency map becomes OTLP log records
-   (one per unique function × trace context pair) and is POSTed to Dynatrace.
+   (one per unique stack × trace context pair) and is POSTed to Dynatrace.
 
-This gives the same statistical profile semantics as Python: a function that appears in
-many 10 ms snapshots was consuming CPU. The only difference is that attribution is
-**per named scope**, not per OS thread stack frame.
+Unlike the old cooperative model (which recorded the same static label for every sample),
+EventPipe captures what the CPU is **actually doing** at each tick — recursive sub-calls,
+library internals — matching Python's depth fidelity.
 
 ```
 request arrives
     ↓
 UseDtProfiling() middleware
-    → DtProfiler.AutoTraceContext("GET /fibonacci")   ← registers scope
+    → DtProfiler.AutoTraceContext("GET /fibonacci")   ← registers thread
         ↓
 BenchmarkController.Fibonacci()
-    → DtProfiler.Section("Fibonacci")                 ← narrows leaf function
+    → (calls RecursiveHelper → RecursiveHelper → ...)
         ↓
-        [timer fires every 10ms — records "Fibonacci" as a sample]
+        [EventPipe fires every 10ms — records actual leaf frame at that moment]
+        [10 ms #1: "BenchmarkController.RecursiveHelper(Int32)"]
+        [10 ms #2: "BenchmarkController.RecursiveHelper(Int32)"]
+        [10 ms #3: "BenchmarkController.Fibonacci(Int32)"]
         ↓
-    scope disposed → removed from registry
+    scope disposed → thread unregistered
         ↓
 [every 30s] → flush → OTLP Logs → Dynatrace
 ```

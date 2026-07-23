@@ -7,7 +7,7 @@
 
     <!-- NuGet package identity -->
     <PackageId>DynatraceOtlpProfiler</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>Srijith Sunil</Authors>
     <Company>Dynatrace</Company>
     <Copyright>Copyright © 2026 Srijith Sunil</Copyright>
@@ -16,11 +16,13 @@
     <Title>Dynatrace OTLP Continuous Profiler for .NET</Title>
     <Description>
       Continuous CPU profiler for ASP.NET Core 8+ that exports stack samples as OTLP Logs
-      directly to Dynatrace. Cooperative sampler (10 ms timer), per-request middleware
-      (UseDtProfiling), trace correlation via Activity.Current, retry + circuit breaker on export.
+      directly to Dynatrace. Uses EventPipe (Microsoft-DotNETCore-SampleProfiler) to capture
+      real managed call stacks at 10 ms intervals — the .NET equivalent of Python's
+      sys._current_frames(). Includes per-request middleware (UseDtProfiling), trace
+      correlation via Activity.Current, retry + circuit breaker on export.
       No OTel Collector required.
     </Description>
-    <PackageTags>dynatrace;profiling;otlp;opentelemetry;apm;continuous-profiling;aspnetcore</PackageTags>
+    <PackageTags>dynatrace;profiling;otlp;opentelemetry;apm;continuous-profiling;aspnetcore;eventpipe</PackageTags>
     <PackageProjectUrl>https://github.com/srijithsunil/dynatrace-otlp-profiling-poc</PackageProjectUrl>
     <RepositoryUrl>https://github.com/srijithsunil/dynatrace-otlp-profiling-poc</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -42,6 +44,16 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+
+    <!--
+      EventPipe-based CPU sampling (the .NET equivalent of sys._current_frames()).
+      DiagnosticsClient connects to the current process's diagnostic port and starts
+      a Microsoft-DotNETCore-SampleProfiler session that fires real managed call
+      stacks every 10 ms — replacing the cooperative/static-label model.
+    -->
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.13" />
+
     <!-- Gives access to IApplicationBuilder, HttpContext, etc. for AspNetCoreExtensions.
          Consumers who don't use ASP.NET Core can ignore those extension methods. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
